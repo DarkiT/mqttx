@@ -1,8 +1,8 @@
 # MQTT Session Manager
 
-[![PkgGoDev](https://pkg.go.dev/badge/github.com/darkit/mqtt.svg)](https://pkg.go.dev/github.com/darkit/mqtt)
-[![Go Report Card](https://goreportcard.com/badge/github.com/darkit/mqtt)](https://goreportcard.com/report/github.com/darkit/mqtt)
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/darkit/mqtt/blob/master/LICENSE)
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/darkit/mqttx.svg)](https://pkg.go.dev/github.com/darkit/mqttx)
+[![Go Report Card](https://goreportcard.com/badge/github.com/darkit/mqttx)](https://goreportcard.com/report/github.com/darkit/mqttx)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/darkit/mqttx/blob/master/LICENSE)
 
 ## Introduction
 
@@ -22,7 +22,7 @@ A robust multi-session MQTT manager for Go applications that provides concurrent
 ## Installation
 
 ```bash
-go get github.com/darkit/mqtt
+go get github.com/darkit/mqttx
 ```
 
 ## Quick Start
@@ -261,12 +261,80 @@ session, _ := m.GetSession("session-name")
 sessionMetrics := session.GetMetrics()
 ```
 
-Available metrics include:
-- Message counts (sent/received)
-- Byte counts
-- Error counts
-- Reconnection attempts
-- Last update timestamps
+##### Prometheus Integration
+
+Expose metrics in Prometheus format via HTTP endpoint:
+
+```go
+// Create HTTP server to expose Prometheus metrics
+go func() {
+    promExporter := manager.NewPrometheusExporter("mqtt")
+    
+    http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+        var output strings.Builder
+        
+        // Collect manager metrics
+        metrics := m.GetMetrics()
+        output.WriteString(promExporter.Export(metrics))
+        
+        // Collect all session metrics
+        for _, name := range m.ListSessions() {
+            if session, err := m.GetSession(name); err == nil {
+                output.WriteString(session.PrometheusMetrics())
+            }
+        }
+        
+        w.Header().Set("Content-Type", "text/plain")
+        fmt.Fprint(w, output.String())
+    })
+    
+    log.Printf("Starting metrics server on :2112")
+    http.ListenAndServe(":2112", nil)
+}()
+```
+
+Add scrape target in Prometheus configuration:
+
+```yaml
+scrape_configs:
+  - job_name: 'mqtt_metrics'
+    static_configs:
+      - targets: ['localhost:2112']
+    scrape_interval: 15s
+```
+
+Available Prometheus metrics include:
+
+Message Metrics:
+- `mqtt_session_messages_sent_total` - Total messages sent
+- `mqtt_session_messages_received_total` - Total messages received
+- `mqtt_session_bytes_sent_total` - Total bytes sent
+- `mqtt_session_bytes_received_total` - Total bytes received
+- `mqtt_session_message_rate` - Messages per second
+- `mqtt_session_bytes_rate` - Bytes per second
+
+Status Metrics:
+- `mqtt_session_connected` - Session connection status (0/1)
+- `mqtt_session_status` - Session status code
+- `mqtt_session_subscriptions` - Active subscription count
+- `mqtt_session_errors_total` - Total error count
+- `mqtt_session_reconnects_total` - Reconnection attempts
+
+Timestamp Metrics:
+- `mqtt_session_last_message_timestamp_seconds` - Unix timestamp of last message
+- `mqtt_session_last_error_timestamp_seconds` - Unix timestamp of last error
+
+Session Properties:
+- `mqtt_session_persistent` - Persistent session flag (0/1)
+- `mqtt_session_clean_session` - Clean session flag (0/1)
+- `mqtt_session_auto_reconnect` - Auto reconnect flag (0/1)
+
+Resource Metrics:
+- `mqtt_session_goroutines` - Number of goroutines
+- `mqtt_session_heap_alloc_bytes` - Allocated heap memory in bytes
+- `mqtt_session_heap_inuse_bytes` - In-use heap memory in bytes
+
+All metrics include a `session="session-name"` label for filtering and aggregation by session.
 
 ## Best Practices
 
@@ -293,15 +361,3 @@ Available metrics include:
 ## License
 
 MIT License - see the [LICENSE](LICENSE) file for details
-
-## Contributing
-
-We welcome contributions! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Create a pull request
-
-For significant changes, please open an issue first to discuss the proposed changes.

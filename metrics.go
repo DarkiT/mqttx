@@ -2,15 +2,27 @@ package mqtt
 
 import (
 	"fmt"
+	"reflect"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
 // newMetrics 创建新的指标收集器
 func newMetrics() *Metrics {
-	return &Metrics{
-		LastUpdate: time.Now(),
+	now := time.Now()
+	m := &Metrics{
+		startTime:     now,
+		LastUpdate:    now,
+		rates:         &RateCounter{lastUpdate: now},
+		resourceStats: &ResourceStats{},
 	}
+	// 启动速率更新器
+	go m.rateUpdater()
+	// 启动资源统计
+	go m.resourceCollector()
+	return m
 }
 
 // newSessionMetrics 创建新的会话指标收集器
@@ -30,8 +42,14 @@ func (m *Metrics) recordMessage(bytes uint64) {
 }
 
 // recordError 记录错误指标
-func (m *Metrics) recordError() {
+func (m *Metrics) recordError(err error) {
 	atomic.AddUint64(&m.ErrorCount, 1)
+	errType := reflect.TypeOf(err).String()
+	if v, ok := m.errorTypes.Load(errType); ok {
+		m.errorTypes.Store(errType, v.(uint64)+1)
+	} else {
+		m.errorTypes.Store(errType, uint64(1))
+	}
 }
 
 // recordReconnect 记录重连指标
@@ -49,16 +67,34 @@ func (m *Metrics) getSnapshot() map[string]interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// 收集错误类型统计
+	errorStats := make(map[string]uint64)
+	m.errorTypes.Range(func(key, value interface{}) bool {
+		errorStats[key.(string)] = value.(uint64)
+		return true
+	})
+
+	// 收集资源统计
+	m.resourceStats.mu.RLock()
+	resourceStats := map[string]interface{}{
+		"goroutines": m.resourceStats.goroutines,
+		"heap_alloc": formatBytes(m.resourceStats.heapAlloc),
+		"heap_inuse": formatBytes(m.resourceStats.heapInUse),
+	}
+	m.resourceStats.mu.RUnlock()
+
 	return map[string]interface{}{
 		"active_sessions": atomic.LoadInt64(&m.ActiveSessions),
 		"total_messages":  atomic.LoadUint64(&m.TotalMessages),
 		"total_bytes":     formatBytes(atomic.LoadUint64(&m.TotalBytes)),
 		"error_count":     atomic.LoadUint64(&m.ErrorCount),
+		"error_types":     errorStats,
 		"reconnect_count": atomic.LoadUint64(&m.ReconnectCount),
 		"last_update":     m.LastUpdate.Format(time.RFC3339),
-		"uptime":          time.Since(m.LastUpdate).String(),
-		"message_rate":    calculateRate(atomic.LoadUint64(&m.TotalMessages), m.LastUpdate),
-		"bytes_rate":      formatBytesRate(atomic.LoadUint64(&m.TotalBytes), m.LastUpdate),
+		"uptime":          time.Since(m.startTime).String(),
+		"message_rate":    m.rates.messageRate.Load(),
+		"bytes_rate":      m.rates.byteRate.Load(),
+		"resource_stats":  resourceStats,
 	}
 }
 
@@ -151,4 +187,47 @@ func formatBytesRate(bytes uint64, since time.Time) string {
 	}
 	return fmt.Sprintf("%.2f %cB/s",
 		bytesPerSecond/div, "KMGTPE"[exp])
+}
+
+// RateCounter 添加新的结构体定义
+type RateCounter struct {
+	messageRate atomic.Value // 消息速率缓存
+	byteRate    atomic.Value // 字节速率缓存
+	lastUpdate  time.Time
+}
+
+// ResourceStats 添加新的结构体定义
+type ResourceStats struct {
+	goroutines int
+	heapAlloc  uint64
+	heapInUse  uint64
+	mu         sync.RWMutex
+}
+
+// rateUpdater 添加新的方法
+func (m *Metrics) rateUpdater() {
+	ticker := time.NewTicker(time.Second)
+	for range ticker.C {
+		messages := atomic.LoadUint64(&m.TotalMessages)
+		bytes := atomic.LoadUint64(&m.TotalBytes)
+
+		m.rates.messageRate.Store(calculateRate(messages, m.rates.lastUpdate))
+		m.rates.byteRate.Store(formatBytesRate(bytes, m.rates.lastUpdate))
+		m.rates.lastUpdate = time.Now()
+	}
+}
+
+// resourceCollector 添加新的方法
+func (m *Metrics) resourceCollector() {
+	ticker := time.NewTicker(30 * time.Second)
+	for range ticker.C {
+		stats := &runtime.MemStats{}
+		runtime.ReadMemStats(stats)
+
+		m.resourceStats.mu.Lock()
+		m.resourceStats.goroutines = runtime.NumGoroutine()
+		m.resourceStats.heapAlloc = stats.HeapAlloc
+		m.resourceStats.heapInUse = stats.HeapInuse
+		m.resourceStats.mu.Unlock()
+	}
 }

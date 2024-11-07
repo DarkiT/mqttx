@@ -106,7 +106,6 @@ func (m *Manager) HandleTo(session, topic string, handler func(*Message)) (*Rout
 			handler(msg)
 		}
 	}, route.qos)
-
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +178,6 @@ func (m *Manager) ListenTo(session, topic string) (chan *Message, *Route, error)
 			}
 		}
 	}, route.qos)
-
 	if err != nil {
 		return nil, nil, err
 	}

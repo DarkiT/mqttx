@@ -1,8 +1,8 @@
 # MQTT 会话管理器
 
-[![PkgGoDev](https://pkg.go.dev/badge/github.com/darkit/mqtt.svg)](https://pkg.go.dev/github.com/darkit/mqtt)
-[![Go Report Card](https://goreportcard.com/badge/github.com/darkit/mqtt)](https://goreportcard.com/report/github.com/darkit/mqtt)
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/darkit/mqtt/blob/master/LICENSE)
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/darkit/mqttx.svg)](https://pkg.go.dev/github.com/darkit/mqttx)
+[![Go Report Card](https://goreportcard.com/badge/github.com/darkit/mqttx)](https://goreportcard.com/report/github.com/darkit/mqttx)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/darkit/mqttx/blob/master/LICENSE)
 
 ## 简介
 
@@ -22,7 +22,7 @@
 ## 安装方法
 
 ```bash
-go get github.com/darkit/mqtt
+go get github.com/darkit/mqttx
 ```
 
 ## 快速开始
@@ -261,12 +261,80 @@ session, _ := m.GetSession("会话名称")
 sessionMetrics := session.GetMetrics()
 ```
 
-可用指标包括：
-- 消息计数（发送/接收）
-- 字节计数
-- 错误计数
-- 重连尝试次数
-- 最后更新时间戳
+##### Prometheus 集成
+
+支持通过 HTTP 端点暴露 Prometheus 格式的指标：
+
+```go
+// 创建 HTTP 服务暴露 Prometheus 指标
+go func() {
+    promExporter := manager.NewPrometheusExporter("mqtt")
+    
+    http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+        var output strings.Builder
+        
+        // 收集管理器指标
+        metrics := m.GetMetrics()
+        output.WriteString(promExporter.Export(metrics))
+        
+        // 收集所有会话指标
+        for _, name := range m.ListSessions() {
+            if session, err := m.GetSession(name); err == nil {
+                output.WriteString(session.PrometheusMetrics())
+            }
+        }
+        
+        w.Header().Set("Content-Type", "text/plain")
+        fmt.Fprint(w, output.String())
+    })
+    
+    log.Printf("Starting metrics server on :2112")
+    http.ListenAndServe(":2112", nil)
+}()
+```
+
+在 Prometheus 配置中添加抓取目标：
+
+```yaml
+scrape_configs:
+  - job_name: 'mqtt_metrics'
+    static_configs:
+      - targets: ['localhost:2112']
+    scrape_interval: 15s
+```
+
+可用的 Prometheus 指标包括：
+
+消息指标：
+- `mqtt_session_messages_sent_total` - 发送的消息总数
+- `mqtt_session_messages_received_total` - 接收的消息总数
+- `mqtt_session_bytes_sent_total` - 发送的字节总数
+- `mqtt_session_bytes_received_total` - 接收的字节总数
+- `mqtt_session_message_rate` - 每秒消息数
+- `mqtt_session_bytes_rate` - 每秒字节数
+
+状态指标：
+- `mqtt_session_connected` - 会话连接状态（0/1）
+- `mqtt_session_status` - 会话状态码
+- `mqtt_session_subscriptions` - 活跃订阅数量
+- `mqtt_session_errors_total` - 错误总数
+- `mqtt_session_reconnects_total` - 重连次数
+
+时间戳指标：
+- `mqtt_session_last_message_timestamp_seconds` - 最后消息的 Unix 时间戳
+- `mqtt_session_last_error_timestamp_seconds` - 最后错误的 Unix 时间戳
+
+会话属性：
+- `mqtt_session_persistent` - 持久会话标志（0/1）
+- `mqtt_session_clean_session` - 清理会话标志（0/1）
+- `mqtt_session_auto_reconnect` - 自动重连标志（0/1）
+
+资源指标：
+- `mqtt_session_goroutines` - goroutine 数量
+- `mqtt_session_heap_alloc_bytes` - 已分配的堆内存（字节）
+- `mqtt_session_heap_inuse_bytes` - 使用中的堆内存（字节）
+
+所有指标都包含 `session="会话名称"` 标签，便于按会话进行过滤和聚合。
 
 ## 最佳实践
 
@@ -293,15 +361,3 @@ sessionMetrics := session.GetMetrics()
 ## 开源协议
 
 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
-
-## 参与贡献
-
-欢迎贡献代码！请：
-
-1. Fork 仓库
-2. 创建功能分支
-3. 进行修改
-4. 添加测试
-5. 提交 Pull Request
-
-对于重大变更，请先创建 Issue 讨论提议的改动。

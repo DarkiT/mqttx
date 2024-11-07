@@ -190,8 +190,12 @@ type Metrics struct {
 	TotalBytes     uint64
 	ErrorCount     uint64
 	ReconnectCount uint64
+	startTime      time.Time
 	LastUpdate     time.Time
 	mu             sync.RWMutex
+	rates          *RateCounter
+	errorTypes     sync.Map
+	resourceStats  *ResourceStats
 }
 
 // SessionMetrics 单个会话的指标

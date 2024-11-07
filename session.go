@@ -2,6 +2,7 @@ package mqtt
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -599,4 +600,113 @@ func (s *Session) GetLastActivity() time.Time {
 func (s *Session) String() string {
 	return fmt.Sprintf("Session{name: %s, client_id: %s, status: %s}",
 		s.name, s.opts.ClientID, s.GetStatus())
+}
+
+// PrometheusMetrics 格式的指标导出
+func (s *Session) PrometheusMetrics() string {
+	metrics := s.GetMetrics()
+	var sb strings.Builder
+
+	// 消息相关指标
+	sb.WriteString(fmt.Sprintf("mqtt_session_messages_sent_total{session=\"%s\"} %v\n",
+		s.name, metrics["messages_sent"]))
+	sb.WriteString(fmt.Sprintf("mqtt_session_messages_received_total{session=\"%s\"} %v\n",
+		s.name, metrics["messages_received"]))
+
+	// 字节相关指标
+	sb.WriteString(fmt.Sprintf("mqtt_session_bytes_sent_total{session=\"%s\"} %v\n",
+		s.name, metrics["bytes_sent"]))
+	sb.WriteString(fmt.Sprintf("mqtt_session_bytes_received_total{session=\"%s\"} %v\n",
+		s.name, metrics["bytes_received"]))
+
+	// 错误和重连指标
+	sb.WriteString(fmt.Sprintf("mqtt_session_errors_total{session=\"%s\"} %v\n",
+		s.name, metrics["errors"]))
+	sb.WriteString(fmt.Sprintf("mqtt_session_reconnects_total{session=\"%s\"} %v\n",
+		s.name, metrics["reconnects"]))
+
+	// 状态指标
+	sb.WriteString(fmt.Sprintf("mqtt_session_connected{session=\"%s\"} %v\n",
+		s.name, s.IsConnected()))
+	sb.WriteString(fmt.Sprintf("mqtt_session_subscriptions{session=\"%s\"} %v\n",
+		s.name, s.GetSubscriptionCount()))
+
+	// 时间相关指标
+	if lastMsg, ok := metrics["last_message"].(time.Time); ok {
+		sb.WriteString(fmt.Sprintf("mqtt_session_last_message_timestamp_seconds{session=\"%s\"} %v\n",
+			s.name, lastMsg.Unix()))
+	}
+	if lastErr, ok := metrics["last_error"].(time.Time); ok && !lastErr.IsZero() {
+		sb.WriteString(fmt.Sprintf("mqtt_session_last_error_timestamp_seconds{session=\"%s\"} %v\n",
+			s.name, lastErr.Unix()))
+	}
+
+	// 会话属性指标
+	sb.WriteString(fmt.Sprintf("mqtt_session_persistent{session=\"%s\"} %v\n",
+		s.name, s.IsPersistent()))
+	sb.WriteString(fmt.Sprintf("mqtt_session_clean_session{session=\"%s\"} %v\n",
+		s.name, s.opts.ConnectProps.CleanSession))
+	sb.WriteString(fmt.Sprintf("mqtt_session_auto_reconnect{session=\"%s\"} %v\n",
+		s.name, s.opts.ConnectProps.AutoReconnect))
+
+	// 状态码指标
+	sb.WriteString(fmt.Sprintf("mqtt_session_status{session=\"%s\"} %v\n",
+		s.name, atomic.LoadUint32(&s.status)))
+
+	// 速率指标
+	if rate, ok := metrics["message_rate"].(string); ok {
+		// 去掉 "/s" 后缀，只保留数值
+		rate = strings.TrimSuffix(rate, "/s")
+		sb.WriteString(fmt.Sprintf("mqtt_session_message_rate{session=\"%s\"} %s\n",
+			s.name, rate))
+	}
+	if rate, ok := metrics["bytes_rate"].(string); ok {
+		// 去掉单位和 "/s" 后缀，只保留数值
+		rate = strings.TrimSuffix(strings.Fields(rate)[0], "/s")
+		sb.WriteString(fmt.Sprintf("mqtt_session_bytes_rate{session=\"%s\"} %s\n",
+			s.name, rate))
+	}
+
+	// 资源统计指标
+	if stats, ok := metrics["resource_stats"].(map[string]interface{}); ok {
+		if goroutines, exists := stats["goroutines"].(int); exists {
+			sb.WriteString(fmt.Sprintf("mqtt_session_goroutines{session=\"%s\"} %d\n",
+				s.name, goroutines))
+		}
+		if heapAlloc, exists := stats["heap_alloc"].(string); exists {
+			// 转换为字节数
+			bytes := parseBytes(heapAlloc)
+			sb.WriteString(fmt.Sprintf("mqtt_session_heap_alloc_bytes{session=\"%s\"} %d\n",
+				s.name, bytes))
+		}
+		if heapInUse, exists := stats["heap_inuse"].(string); exists {
+			// 转换为字节数
+			bytes := parseBytes(heapInUse)
+			sb.WriteString(fmt.Sprintf("mqtt_session_heap_inuse_bytes{session=\"%s\"} %d\n",
+				s.name, bytes))
+		}
+	}
+
+	return sb.String()
+}
+
+// parseBytes 辅助函数：将可读的字节大小字符串转换为字节数
+func parseBytes(s string) uint64 {
+	var value float64
+	var unit string
+	fmt.Sscanf(s, "%f %s", &value, &unit)
+
+	multiplier := map[string]uint64{
+		"B":  1,
+		"KB": 1024,
+		"MB": 1024 * 1024,
+		"GB": 1024 * 1024 * 1024,
+		"TB": 1024 * 1024 * 1024 * 1024,
+		"PB": 1024 * 1024 * 1024 * 1024 * 1024,
+	}
+
+	if m, ok := multiplier[unit]; ok {
+		return uint64(value * float64(m))
+	}
+	return uint64(value)
 }

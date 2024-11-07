@@ -2,14 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	manager "github.com/darkit/mqtt"
+	manager "github.com/darkit/mqttx"
 	"github.com/darkit/slog"
 )
 
@@ -39,7 +42,7 @@ func main() {
 
 	// 创建存储目录
 	storageDir := filepath.Join(os.TempDir(), "mqtt-sessions")
-	os.MkdirAll(storageDir, 0755)
+	os.MkdirAll(storageDir, 0o755)
 
 	// 1. 添加持久化会话
 	persistentOpts := &manager.Options{
@@ -274,6 +277,40 @@ func main() {
 			slog.Printf("SubscribeTo received: %s", string(payload))
 		}, qos); err != nil {
 			slog.Printf("SubscribeTo error: %v", err)
+		}
+	}()
+
+	// 创建 HTTP 服务来暴露 Prometheus 指标
+	go func() {
+		// 创建一个导出器实例
+		promExporter := manager.NewPrometheusExporter("mqtt")
+
+		// 注册 metrics 端点
+		http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+			// 收集所有会话的指标
+			var output strings.Builder
+
+			// 收集管理器级别的指标
+			metrics := m.GetMetrics()
+			output.WriteString(promExporter.Export(metrics))
+
+			// 收集每个会话的指标
+			for _, name := range m.ListSessions() {
+				if session, err := m.GetSession(name); err == nil {
+					output.WriteString(session.PrometheusMetrics())
+				}
+			}
+
+			// 设置内容类型并写入响应
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, output.String())
+		})
+
+		// 启动 HTTP 服务器
+		serverAddr := ":2112" // Prometheus 默认抓取端口为 9090，这里使用 2112 避免冲突
+		slog.Printf("Starting metrics server on %s", serverAddr)
+		if err := http.ListenAndServe(serverAddr, nil); err != nil {
+			slog.Printf("Metrics server error: %v", err)
 		}
 	}()
 

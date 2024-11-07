@@ -16,7 +16,7 @@ type FileStore struct {
 
 // NewFileStore 创建新的文件存储
 func NewFileStore(directory string) (*FileStore, error) {
-	if err := os.MkdirAll(directory, 0755); err != nil {
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
@@ -36,7 +36,7 @@ func (s *FileStore) SaveState(sessionName string, state *SessionState) error {
 	}
 
 	filename := filepath.Join(s.directory, fmt.Sprintf("%s.json", sessionName))
-	if err := os.WriteFile(filename, data, 0644); err != nil {
+	if err := os.WriteFile(filename, data, 0o644); err != nil {
 		return wrapError(err, "failed to write session state")
 	}
 

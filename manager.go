@@ -164,7 +164,7 @@ func (m *Manager) PublishTo(name string, topic string, payload []byte, qos byte)
 	}
 
 	if err := session.Publish(topic, payload, qos); err != nil {
-		m.metrics.recordError()
+		m.metrics.recordError(err)
 		return newSessionError(name, err)
 	}
 
