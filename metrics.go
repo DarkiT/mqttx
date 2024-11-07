@@ -13,9 +13,13 @@ import (
 func newMetrics() *Metrics {
 	now := time.Now()
 	m := &Metrics{
-		startTime:     now,
-		LastUpdate:    now,
-		rates:         &RateCounter{lastUpdate: now},
+		startTime:  now,
+		LastUpdate: now,
+		rates: &RateCounter{
+			messageRate:    &atomic.Value{},
+			byteRate:       &atomic.Value{},
+			avgMessageRate: &atomic.Value{},
+		},
 		resourceStats: &ResourceStats{},
 	}
 	// 启动速率更新器
@@ -67,34 +71,33 @@ func (m *Metrics) getSnapshot() map[string]interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// 收集错误类型统计
-	errorStats := make(map[string]uint64)
-	m.errorTypes.Range(func(key, value interface{}) bool {
-		errorStats[key.(string)] = value.(uint64)
-		return true
-	})
-
-	// 收集资源统计
-	m.resourceStats.mu.RLock()
-	resourceStats := map[string]interface{}{
-		"goroutines": m.resourceStats.goroutines,
-		"heap_alloc": formatBytes(m.resourceStats.heapAlloc),
-		"heap_inuse": formatBytes(m.resourceStats.heapInUse),
+	// 获取速率值，确保不为空
+	messageRate := m.rates.messageRate.Load()
+	if messageRate == nil {
+		messageRate = "0.00/s"
 	}
-	m.resourceStats.mu.RUnlock()
+
+	byteRate := m.rates.byteRate.Load()
+	if byteRate == nil {
+		byteRate = "0 B/s"
+	}
+
+	avgRate := m.rates.avgMessageRate.Load()
+	if avgRate == nil {
+		avgRate = "0.00/s"
+	}
 
 	return map[string]interface{}{
-		"active_sessions": atomic.LoadInt64(&m.ActiveSessions),
-		"total_messages":  atomic.LoadUint64(&m.TotalMessages),
-		"total_bytes":     formatBytes(atomic.LoadUint64(&m.TotalBytes)),
-		"error_count":     atomic.LoadUint64(&m.ErrorCount),
-		"error_types":     errorStats,
-		"reconnect_count": atomic.LoadUint64(&m.ReconnectCount),
-		"last_update":     m.LastUpdate.Format(time.RFC3339),
-		"uptime":          time.Since(m.startTime).String(),
-		"message_rate":    m.rates.messageRate.Load(),
-		"bytes_rate":      m.rates.byteRate.Load(),
-		"resource_stats":  resourceStats,
+		"active_sessions":  atomic.LoadInt64(&m.ActiveSessions),
+		"total_messages":   atomic.LoadUint64(&m.TotalMessages),
+		"total_bytes":      formatBytes(atomic.LoadUint64(&m.TotalBytes)),
+		"message_rate":     messageRate,
+		"bytes_rate":       byteRate,
+		"avg_message_rate": avgRate,
+		"error_count":      atomic.LoadUint64(&m.ErrorCount),
+		"reconnect_count":  atomic.LoadUint64(&m.ReconnectCount),
+		"last_update":      m.LastUpdate.Format(time.RFC3339),
+		"uptime":           time.Since(m.startTime).String(),
 	}
 }
 
@@ -189,11 +192,11 @@ func formatBytesRate(bytes uint64, since time.Time) string {
 		bytesPerSecond/div, "KMGTPE"[exp])
 }
 
-// RateCounter 添加新的结构体定义
+// RateCounter 速率计数器
 type RateCounter struct {
-	messageRate atomic.Value // 消息速率缓存
-	byteRate    atomic.Value // 字节速率缓存
-	lastUpdate  time.Time
+	messageRate    *atomic.Value // string
+	byteRate       *atomic.Value // string
+	avgMessageRate *atomic.Value
 }
 
 // ResourceStats 添加新的结构体定义
@@ -204,16 +207,44 @@ type ResourceStats struct {
 	mu         sync.RWMutex
 }
 
-// rateUpdater 添加新的方法
+// rateUpdater 更新速率指标
 func (m *Metrics) rateUpdater() {
 	ticker := time.NewTicker(time.Second)
-	for range ticker.C {
-		messages := atomic.LoadUint64(&m.TotalMessages)
-		bytes := atomic.LoadUint64(&m.TotalBytes)
+	defer ticker.Stop()
 
-		m.rates.messageRate.Store(calculateRate(messages, m.rates.lastUpdate))
-		m.rates.byteRate.Store(formatBytesRate(bytes, m.rates.lastUpdate))
-		m.rates.lastUpdate = time.Now()
+	var lastMessageCount uint64
+	var lastByteCount uint64
+	var lastTime = time.Now()
+
+	for range ticker.C {
+		currentTime := time.Now()
+		currentMessages := atomic.LoadUint64(&m.TotalMessages)
+		currentBytes := atomic.LoadUint64(&m.TotalBytes)
+
+		// 计算时间间隔（秒）
+		interval := currentTime.Sub(lastTime).Seconds()
+		if interval > 0 {
+			// 计算消息速率
+			messagesDiff := currentMessages - lastMessageCount
+			messageRate := float64(messagesDiff) / interval
+			m.rates.messageRate.Store(fmt.Sprintf("%.2f/s", messageRate))
+
+			// 计算数据速率
+			bytesDiff := currentBytes - lastByteCount
+			byteRate := float64(bytesDiff) / interval
+			m.rates.byteRate.Store(formatBytes(uint64(byteRate)) + "/s")
+
+			// 计算平均速率
+			uptime := currentTime.Sub(m.startTime).Seconds()
+			if uptime > 0 {
+				avgMessageRate := float64(currentMessages) / uptime
+				m.rates.avgMessageRate.Store(fmt.Sprintf("%.2f/s", avgMessageRate))
+			}
+		}
+
+		lastMessageCount = currentMessages
+		lastByteCount = currentBytes
+		lastTime = currentTime
 	}
 }
 

@@ -660,6 +660,12 @@ func (s *Session) PrometheusMetrics() string {
 		sb.WriteString(fmt.Sprintf("mqtt_session_message_rate{session=\"%s\"} %s\n",
 			s.name, rate))
 	}
+	if avgRate, ok := metrics["avg_message_rate"].(string); ok {
+		// 去掉 "/s" 后缀，只保留数值
+		avgRate = strings.TrimSuffix(avgRate, "/s")
+		sb.WriteString(fmt.Sprintf("mqtt_session_avg_message_rate{session=\"%s\"} %s\n",
+			s.name, avgRate))
+	}
 	if rate, ok := metrics["bytes_rate"].(string); ok {
 		// 去掉单位和 "/s" 后缀，只保留数值
 		rate = strings.TrimSuffix(strings.Fields(rate)[0], "/s")
