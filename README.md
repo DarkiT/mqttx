@@ -310,7 +310,8 @@ Message Metrics:
 - `mqtt_session_messages_received_total` - Total messages received
 - `mqtt_session_bytes_sent_total` - Total bytes sent
 - `mqtt_session_bytes_received_total` - Total bytes received
-- `mqtt_session_message_rate` - Messages per second
+- `mqtt_session_message_rate` - Current messages per second
+- `mqtt_session_avg_message_rate` - Average messages per second since start
 - `mqtt_session_bytes_rate` - Bytes per second
 
 Status Metrics:
@@ -329,11 +330,6 @@ Session Properties:
 - `mqtt_session_clean_session` - Clean session flag (0/1)
 - `mqtt_session_auto_reconnect` - Auto reconnect flag (0/1)
 
-Resource Metrics:
-- `mqtt_session_goroutines` - Number of goroutines
-- `mqtt_session_heap_alloc_bytes` - Allocated heap memory in bytes
-- `mqtt_session_heap_inuse_bytes` - In-use heap memory in bytes
-
 All metrics include a `session="session-name"` label for filtering and aggregation by session.
 
 ## Best Practices
@@ -347,6 +343,8 @@ All metrics include a `session="session-name"` label for filtering and aggregati
     - Configure appropriate buffer sizes for your use case
     - Use session-specific subscriptions (`HandleTo`/`ListenTo`) when possible
     - Monitor metrics to identify bottlenecks
+    - Compare current and average message rates to identify traffic patterns
+    - Use metrics data for capacity planning and performance tuning
 
 3. **Reliability**
     - Enable automatic reconnection for production use

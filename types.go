@@ -2,6 +2,7 @@ package mqtt
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -195,7 +196,13 @@ type Metrics struct {
 	mu             sync.RWMutex
 	rates          *RateCounter
 	errorTypes     sync.Map
-	resourceStats  *ResourceStats
+}
+
+// RateCounter 速率计数器
+type RateCounter struct {
+	messageRate    *atomic.Value // string
+	byteRate       *atomic.Value // string
+	avgMessageRate *atomic.Value
 }
 
 // SessionMetrics 单个会话的指标

@@ -310,7 +310,8 @@ scrape_configs:
 - `mqtt_session_messages_received_total` - 接收的消息总数
 - `mqtt_session_bytes_sent_total` - 发送的字节总数
 - `mqtt_session_bytes_received_total` - 接收的字节总数
-- `mqtt_session_message_rate` - 每秒消息数
+- `mqtt_session_message_rate` - 当前每秒消息数
+- `mqtt_session_avg_message_rate` - 启动以来的平均每秒消息数
 - `mqtt_session_bytes_rate` - 每秒字节数
 
 状态指标：
@@ -329,11 +330,6 @@ scrape_configs:
 - `mqtt_session_clean_session` - 清理会话标志（0/1）
 - `mqtt_session_auto_reconnect` - 自动重连标志（0/1）
 
-资源指标：
-- `mqtt_session_goroutines` - goroutine 数量
-- `mqtt_session_heap_alloc_bytes` - 已分配的堆内存（字节）
-- `mqtt_session_heap_inuse_bytes` - 使用中的堆内存（字节）
-
 所有指标都包含 `session="会话名称"` 标签，便于按会话进行过滤和聚合。
 
 ## 最佳实践
@@ -347,6 +343,8 @@ scrape_configs:
    - 根据使用场景配置适当的缓冲区大小
    - 尽可能使用特定会话的订阅（`HandleTo`/`ListenTo`）
    - 监控指标以识别性能瓶颈
+   - 对比当前和平均消息速率以识别流量模式
+   - 利用指标数据进行容量规划和性能调优
 
 3. **可靠性**
    - 在生产环境中启用自动重连

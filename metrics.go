@@ -3,10 +3,14 @@ package mqtt
 import (
 	"fmt"
 	"reflect"
-	"runtime"
-	"sync"
 	"sync/atomic"
 	"time"
+)
+
+// 添加速率格式化常量
+const (
+	UnitMsg  = "msg/s"
+	UnitByte = "B/s"
 )
 
 // newMetrics 创建新的指标收集器
@@ -20,12 +24,9 @@ func newMetrics() *Metrics {
 			byteRate:       &atomic.Value{},
 			avgMessageRate: &atomic.Value{},
 		},
-		resourceStats: &ResourceStats{},
 	}
 	// 启动速率更新器
 	go m.rateUpdater()
-	// 启动资源统计
-	go m.resourceCollector()
 	return m
 }
 
@@ -56,11 +57,6 @@ func (m *Metrics) recordError(err error) {
 	}
 }
 
-// recordReconnect 记录重连指标
-func (m *Metrics) recordReconnect() {
-	atomic.AddUint64(&m.ReconnectCount, 1)
-}
-
 // updateSessionCount 更新会话计数
 func (m *Metrics) updateSessionCount(delta int64) {
 	atomic.AddInt64(&m.ActiveSessions, delta)
@@ -71,32 +67,33 @@ func (m *Metrics) getSnapshot() map[string]interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// 获取速率值，确保不为空
 	messageRate := m.rates.messageRate.Load()
 	if messageRate == nil {
-		messageRate = "0.00/s"
+		messageRate = formatRate(0)
 	}
 
 	byteRate := m.rates.byteRate.Load()
 	if byteRate == nil {
-		byteRate = "0 B/s"
+		byteRate = formatByteRate(0)
 	}
 
 	avgRate := m.rates.avgMessageRate.Load()
 	if avgRate == nil {
-		avgRate = "0.00/s"
+		avgRate = formatRate(0)
 	}
+
+	totalBytes := atomic.LoadUint64(&m.TotalBytes)
 
 	return map[string]interface{}{
 		"active_sessions":  atomic.LoadInt64(&m.ActiveSessions),
 		"total_messages":   atomic.LoadUint64(&m.TotalMessages),
-		"total_bytes":      formatBytes(atomic.LoadUint64(&m.TotalBytes)),
+		"total_bytes":      formatBytes(totalBytes),
 		"message_rate":     messageRate,
 		"bytes_rate":       byteRate,
 		"avg_message_rate": avgRate,
 		"error_count":      atomic.LoadUint64(&m.ErrorCount),
 		"reconnect_count":  atomic.LoadUint64(&m.ReconnectCount),
-		"last_update":      m.LastUpdate.Format(time.RFC3339),
+		"last_update":      m.LastUpdate.Format(time.DateTime),
 		"uptime":           time.Since(m.startTime).String(),
 	}
 }
@@ -146,68 +143,7 @@ func (m *SessionMetrics) getSnapshot() map[string]interface{} {
 	}
 }
 
-// formatBytes 格式化字节大小为可读格式
-func formatBytes(bytes uint64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := uint64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.2f %cB",
-		float64(bytes)/float64(div), "KMGTPE"[exp])
-}
-
-// calculateRate 计算每秒速率
-func calculateRate(count uint64, since time.Time) string {
-	duration := time.Since(since).Seconds()
-	if duration == 0 {
-		return "0/s"
-	}
-	rate := float64(count) / duration
-	return fmt.Sprintf("%.2f/s", rate)
-}
-
-// formatBytesRate 格式化字节速率
-func formatBytesRate(bytes uint64, since time.Time) string {
-	duration := time.Since(since).Seconds()
-	if duration == 0 {
-		return "0 B/s"
-	}
-	bytesPerSecond := float64(bytes) / duration
-
-	const unit = 1024
-	if bytesPerSecond < unit {
-		return fmt.Sprintf("%.2f B/s", bytesPerSecond)
-	}
-	div, exp := float64(unit), 0
-	for n := bytesPerSecond / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.2f %cB/s",
-		bytesPerSecond/div, "KMGTPE"[exp])
-}
-
-// RateCounter 速率计数器
-type RateCounter struct {
-	messageRate    *atomic.Value // string
-	byteRate       *atomic.Value // string
-	avgMessageRate *atomic.Value
-}
-
-// ResourceStats 添加新的结构体定义
-type ResourceStats struct {
-	goroutines int
-	heapAlloc  uint64
-	heapInUse  uint64
-	mu         sync.RWMutex
-}
-
-// rateUpdater 更新速率指标
+// rateUpdater 优化后的速率更新器
 func (m *Metrics) rateUpdater() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -221,24 +157,23 @@ func (m *Metrics) rateUpdater() {
 		currentMessages := atomic.LoadUint64(&m.TotalMessages)
 		currentBytes := atomic.LoadUint64(&m.TotalBytes)
 
-		// 计算时间间隔（秒）
 		interval := currentTime.Sub(lastTime).Seconds()
 		if interval > 0 {
 			// 计算消息速率
 			messagesDiff := currentMessages - lastMessageCount
 			messageRate := float64(messagesDiff) / interval
-			m.rates.messageRate.Store(fmt.Sprintf("%.2f/s", messageRate))
+			m.rates.messageRate.Store(formatRate(messageRate))
 
 			// 计算数据速率
 			bytesDiff := currentBytes - lastByteCount
-			byteRate := float64(bytesDiff) / interval
-			m.rates.byteRate.Store(formatBytes(uint64(byteRate)) + "/s")
+			byteRate := uint64(float64(bytesDiff) / interval)
+			m.rates.byteRate.Store(formatByteRate(byteRate))
 
 			// 计算平均速率
 			uptime := currentTime.Sub(m.startTime).Seconds()
 			if uptime > 0 {
 				avgMessageRate := float64(currentMessages) / uptime
-				m.rates.avgMessageRate.Store(fmt.Sprintf("%.2f/s", avgMessageRate))
+				m.rates.avgMessageRate.Store(formatRate(avgMessageRate))
 			}
 		}
 
@@ -248,17 +183,42 @@ func (m *Metrics) rateUpdater() {
 	}
 }
 
-// resourceCollector 添加新的方法
-func (m *Metrics) resourceCollector() {
-	ticker := time.NewTicker(30 * time.Second)
-	for range ticker.C {
-		stats := &runtime.MemStats{}
-		runtime.ReadMemStats(stats)
-
-		m.resourceStats.mu.Lock()
-		m.resourceStats.goroutines = runtime.NumGoroutine()
-		m.resourceStats.heapAlloc = stats.HeapAlloc
-		m.resourceStats.heapInUse = stats.HeapInuse
-		m.resourceStats.mu.Unlock()
+// formatBytes 格式化字节大小为可读格式
+func formatBytes(bytes uint64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
 	}
+	div, exp := uint64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// formatRate 格式化速率
+func formatRate(value float64) string {
+	switch {
+	case value >= 1000000:
+		return fmt.Sprintf("%.2f M%s", value/1000000, UnitMsg)
+	case value >= 1000:
+		return fmt.Sprintf("%.2f k%s", value/1000, UnitMsg)
+	default:
+		return fmt.Sprintf("%.2f %s", value, UnitMsg)
+	}
+}
+
+// formatByteRate 格式化字节速率
+func formatByteRate(bytesPerSecond uint64) string {
+	const unit = 1024
+	if bytesPerSecond < unit {
+		return fmt.Sprintf("%d %s", bytesPerSecond, UnitByte)
+	}
+	div, exp := uint64(unit), 0
+	for n := bytesPerSecond / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB/s", float64(bytesPerSecond)/float64(div), "KMGTPE"[exp])
 }

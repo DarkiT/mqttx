@@ -10,12 +10,62 @@ import (
 
 // NewSessionManager 创建新的MQTT管理器
 func NewSessionManager() *Manager {
-	return &Manager{
+	m := &Manager{
 		sessions: make(map[string]*Session),
 		events:   newEventManager(),
 		logger:   newDefaultLogger(),
 		metrics:  newMetrics(),
 	}
+
+	// 启动指标更新器
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+
+		var lastMessageCount uint64
+		var lastByteCount uint64
+		var lastTime = time.Now()
+
+		for range ticker.C {
+			currentTime := time.Now()
+
+			// 更新其他指标
+			m.updateMetrics()
+
+			// 获取当前计数
+			currentMessages := atomic.LoadUint64(&m.metrics.TotalMessages)
+			currentBytes := atomic.LoadUint64(&m.metrics.TotalBytes)
+
+			// 计算时间间隔（秒）
+			interval := currentTime.Sub(lastTime).Seconds()
+			if interval > 0 {
+				// 计算消息速率
+				messagesDiff := float64(currentMessages - lastMessageCount)
+				messageRate := messagesDiff / interval
+				m.metrics.rates.messageRate.Store(fmt.Sprintf("%.2f/s", messageRate))
+
+				// 计算数据速率
+				bytesDiff := float64(currentBytes - lastByteCount)
+
+				byteRate := bytesDiff / interval
+				m.metrics.rates.byteRate.Store(formatBytes(uint64(byteRate)) + "/s")
+
+				// 计算平均速率
+				uptime := currentTime.Sub(m.metrics.startTime).Seconds()
+				if uptime > 0 {
+					avgMessageRate := float64(currentMessages) / uptime
+					m.metrics.rates.avgMessageRate.Store(fmt.Sprintf("%.2f/s", avgMessageRate))
+				}
+			}
+
+			// 更新上一次的计数
+			lastMessageCount = currentMessages
+			lastByteCount = currentBytes
+			lastTime = currentTime
+		}
+	}()
+
+	return m
 }
 
 // SetLogger 设置日志记录器
@@ -353,4 +403,40 @@ func (m *Manager) WaitForAllSessions(timeout time.Duration) error {
 // Close 关闭管理器
 func (m *Manager) Close() {
 	m.DisconnectAll()
+}
+
+// updateMetrics 更新管理器级别的指标
+func (m *Manager) updateMetrics() {
+	var totalMessages, totalBytes uint64
+	var totalErrors, totalReconnects uint64
+
+	// 汇总所有会话的指标
+	m.mu.RLock()
+	for _, session := range m.sessions {
+		metrics := session.GetMetrics()
+		// 分别获取发送和接收的消息数
+		sent := metrics["messages_sent"].(uint64)
+		received := metrics["messages_received"].(uint64)
+		totalMessages += sent + received
+
+		// 分别获取发送和接收的字节数
+		bytesSent := metrics["bytes_sent"].(uint64)
+		bytesReceived := metrics["bytes_received"].(uint64)
+		totalBytes += bytesSent + bytesReceived
+
+		totalErrors += metrics["errors"].(uint64)
+		totalReconnects += metrics["reconnects"].(uint64)
+	}
+	m.mu.RUnlock()
+
+	// 原子操作更新指标
+	atomic.StoreUint64(&m.metrics.TotalMessages, totalMessages)
+	atomic.StoreUint64(&m.metrics.TotalBytes, totalBytes)
+	atomic.StoreUint64(&m.metrics.ErrorCount, totalErrors)
+	atomic.StoreUint64(&m.metrics.ReconnectCount, totalReconnects)
+
+	// 更新最后更新时间
+	m.metrics.mu.Lock()
+	m.metrics.LastUpdate = time.Now()
+	m.metrics.mu.Unlock()
 }

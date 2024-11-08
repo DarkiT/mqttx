@@ -2,6 +2,7 @@ package mqtt
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -598,8 +599,7 @@ func (s *Session) GetLastActivity() time.Time {
 
 // String 返回会话的字符串表示
 func (s *Session) String() string {
-	return fmt.Sprintf("Session{name: %s, client_id: %s, status: %s}",
-		s.name, s.opts.ClientID, s.GetStatus())
+	return fmt.Sprintf("Session{name: %s, client_id: %s, status: %s}", s.name, s.opts.ClientID, s.GetStatus())
 }
 
 // PrometheusMetrics 格式的指标导出
@@ -607,112 +607,93 @@ func (s *Session) PrometheusMetrics() string {
 	metrics := s.GetMetrics()
 	var sb strings.Builder
 
-	// 消息相关指标
-	sb.WriteString(fmt.Sprintf("mqtt_session_messages_sent_total{session=\"%s\"} %v\n",
-		s.name, metrics["messages_sent"]))
-	sb.WriteString(fmt.Sprintf("mqtt_session_messages_received_total{session=\"%s\"} %v\n",
-		s.name, metrics["messages_received"]))
-
-	// 字节相关指标
-	sb.WriteString(fmt.Sprintf("mqtt_session_bytes_sent_total{session=\"%s\"} %v\n",
-		s.name, metrics["bytes_sent"]))
-	sb.WriteString(fmt.Sprintf("mqtt_session_bytes_received_total{session=\"%s\"} %v\n",
-		s.name, metrics["bytes_received"]))
-
-	// 错误和重连指标
-	sb.WriteString(fmt.Sprintf("mqtt_session_errors_total{session=\"%s\"} %v\n",
-		s.name, metrics["errors"]))
-	sb.WriteString(fmt.Sprintf("mqtt_session_reconnects_total{session=\"%s\"} %v\n",
-		s.name, metrics["reconnects"]))
+	// 基础计数指标
+	writeGaugeMetric(&sb, "mqtt_session_messages_sent_total", s.name, metrics["messages_sent"])
+	writeGaugeMetric(&sb, "mqtt_session_messages_received_total", s.name, metrics["messages_received"])
+	writeGaugeMetric(&sb, "mqtt_session_bytes_sent_total", s.name, metrics["bytes_sent"])
+	writeGaugeMetric(&sb, "mqtt_session_bytes_received_total", s.name, metrics["bytes_received"])
+	writeGaugeMetric(&sb, "mqtt_session_errors_total", s.name, metrics["errors"])
+	writeGaugeMetric(&sb, "mqtt_session_reconnects_total", s.name, metrics["reconnects"])
 
 	// 状态指标
-	sb.WriteString(fmt.Sprintf("mqtt_session_connected{session=\"%s\"} %v\n",
-		s.name, s.IsConnected()))
-	sb.WriteString(fmt.Sprintf("mqtt_session_subscriptions{session=\"%s\"} %v\n",
-		s.name, s.GetSubscriptionCount()))
+	writeGaugeMetric(&sb, "mqtt_session_connected", s.name, map[bool]float64{true: 1, false: 0}[s.IsConnected()])
+	writeGaugeMetric(&sb, "mqtt_session_subscriptions", s.name, s.GetSubscriptionCount())
 
-	// 时间相关指标
+	// 时间戳指标
 	if lastMsg, ok := metrics["last_message"].(time.Time); ok {
-		sb.WriteString(fmt.Sprintf("mqtt_session_last_message_timestamp_seconds{session=\"%s\"} %v\n",
-			s.name, lastMsg.Unix()))
+		writeGaugeMetric(&sb, "mqtt_session_last_message_timestamp_seconds", s.name, float64(lastMsg.Unix()))
 	}
 	if lastErr, ok := metrics["last_error"].(time.Time); ok && !lastErr.IsZero() {
-		sb.WriteString(fmt.Sprintf("mqtt_session_last_error_timestamp_seconds{session=\"%s\"} %v\n",
-			s.name, lastErr.Unix()))
+		writeGaugeMetric(&sb, "mqtt_session_last_error_timestamp_seconds", s.name, float64(lastErr.Unix()))
 	}
 
 	// 会话属性指标
-	sb.WriteString(fmt.Sprintf("mqtt_session_persistent{session=\"%s\"} %v\n",
-		s.name, s.IsPersistent()))
-	sb.WriteString(fmt.Sprintf("mqtt_session_clean_session{session=\"%s\"} %v\n",
-		s.name, s.opts.ConnectProps.CleanSession))
-	sb.WriteString(fmt.Sprintf("mqtt_session_auto_reconnect{session=\"%s\"} %v\n",
-		s.name, s.opts.ConnectProps.AutoReconnect))
+	writeGaugeMetric(&sb, "mqtt_session_persistent", s.name, map[bool]float64{true: 1, false: 0}[s.IsPersistent()])
+	writeGaugeMetric(&sb, "mqtt_session_clean_session", s.name, map[bool]float64{true: 1, false: 0}[s.opts.ConnectProps.CleanSession])
+	writeGaugeMetric(&sb, "mqtt_session_auto_reconnect", s.name, map[bool]float64{true: 1, false: 0}[s.opts.ConnectProps.AutoReconnect])
+	writeGaugeMetric(&sb, "mqtt_session_status", s.name, float64(atomic.LoadUint32(&s.status)))
 
-	// 状态码指标
-	sb.WriteString(fmt.Sprintf("mqtt_session_status{session=\"%s\"} %v\n",
-		s.name, atomic.LoadUint32(&s.status)))
-
-	// 速率指标
-	if rate, ok := metrics["message_rate"].(string); ok {
-		// 去掉 "/s" 后缀，只保留数值
-		rate = strings.TrimSuffix(rate, "/s")
-		sb.WriteString(fmt.Sprintf("mqtt_session_message_rate{session=\"%s\"} %s\n",
-			s.name, rate))
-	}
-	if avgRate, ok := metrics["avg_message_rate"].(string); ok {
-		// 去掉 "/s" 后缀，只保留数值
-		avgRate = strings.TrimSuffix(avgRate, "/s")
-		sb.WriteString(fmt.Sprintf("mqtt_session_avg_message_rate{session=\"%s\"} %s\n",
-			s.name, avgRate))
-	}
-	if rate, ok := metrics["bytes_rate"].(string); ok {
-		// 去掉单位和 "/s" 后缀，只保留数值
-		rate = strings.TrimSuffix(strings.Fields(rate)[0], "/s")
-		sb.WriteString(fmt.Sprintf("mqtt_session_bytes_rate{session=\"%s\"} %s\n",
-			s.name, rate))
-	}
-
-	// 资源统计指标
-	if stats, ok := metrics["resource_stats"].(map[string]interface{}); ok {
-		if goroutines, exists := stats["goroutines"].(int); exists {
-			sb.WriteString(fmt.Sprintf("mqtt_session_goroutines{session=\"%s\"} %d\n",
-				s.name, goroutines))
-		}
-		if heapAlloc, exists := stats["heap_alloc"].(string); exists {
-			// 转换为字节数
-			bytes := parseBytes(heapAlloc)
-			sb.WriteString(fmt.Sprintf("mqtt_session_heap_alloc_bytes{session=\"%s\"} %d\n",
-				s.name, bytes))
-		}
-		if heapInUse, exists := stats["heap_inuse"].(string); exists {
-			// 转换为字节数
-			bytes := parseBytes(heapInUse)
-			sb.WriteString(fmt.Sprintf("mqtt_session_heap_inuse_bytes{session=\"%s\"} %d\n",
-				s.name, bytes))
-		}
-	}
+	// 速率指标处理
+	writeRateMetric(&sb, "mqtt_session_message_rate", s.name, metrics["message_rate"])
+	writeRateMetric(&sb, "mqtt_session_avg_message_rate", s.name, metrics["avg_message_rate"])
+	writeByteRateMetric(&sb, "mqtt_session_bytes_rate", s.name, metrics["bytes_rate"])
 
 	return sb.String()
 }
 
-// parseBytes 辅助函数：将可读的字节大小字符串转换为字节数
-func parseBytes(s string) uint64 {
-	var value float64
-	var unit string
-	fmt.Sscanf(s, "%f %s", &value, &unit)
+// 辅助函数
+func writeGaugeMetric(sb *strings.Builder, name, session string, value interface{}) {
+	sb.WriteString(fmt.Sprintf("%s{session=\"%s\"} %v\n", name, session, value))
+}
 
-	multiplier := map[string]uint64{
-		"B":  1,
-		"KB": 1024,
-		"MB": 1024 * 1024,
-		"GB": 1024 * 1024 * 1024,
-		"TB": 1024 * 1024 * 1024 * 1024,
-		"PB": 1024 * 1024 * 1024 * 1024 * 1024,
+func writeRateMetric(sb *strings.Builder, name, session string, rate interface{}) {
+	if rateStr, ok := rate.(string); ok {
+		// 解析速率值，去除单位（msg/s, kmsg/s, Mmsg/s）
+		value := parseRate(rateStr)
+		writeGaugeMetric(sb, name, session, value)
 	}
+}
 
-	if m, ok := multiplier[unit]; ok {
-		return uint64(value * float64(m))
+func writeByteRateMetric(sb *strings.Builder, name, session string, rate interface{}) {
+	if rateStr, ok := rate.(string); ok {
+		// 解析字节速率，转换为标准单位（B/s）
+		value := parseByteRate(rateStr)
+		writeGaugeMetric(sb, name, session, value)
 	}
-	return uint64(value)
+}
+
+// 解析速率字符串，返回标准单位的数值
+func parseRate(rate string) float64 {
+	parts := strings.Fields(rate)
+	if len(parts) != 2 {
+		return 0
+	}
+	value, _ := strconv.ParseFloat(parts[0], 64)
+
+	// 根据单位进行转换
+	switch {
+	case strings.HasPrefix(parts[1], "M"):
+		value *= 1000000
+	case strings.HasPrefix(parts[1], "k"):
+		value *= 1000
+	}
+	return value
+}
+
+// 解析字节速率字符串，返回字节/秒
+func parseByteRate(rate string) float64 {
+	parts := strings.Fields(rate)
+	if len(parts) != 2 {
+		return 0
+	}
+	value, _ := strconv.ParseFloat(parts[0], 64)
+
+	// 根据单位进行转换
+	switch {
+	case strings.HasPrefix(parts[1], "M"):
+		value *= 1000000
+	case strings.HasPrefix(parts[1], "k"):
+		value *= 1000
+	}
+	return value
 }
