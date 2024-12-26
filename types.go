@@ -228,18 +228,6 @@ type SessionStore interface {
 	DeleteState(sessionName string) error
 }
 
-// Logger 日志接口
-type Logger interface {
-	Debug(msg string, args ...interface{})
-	Debugf(format string, args ...interface{})
-	Info(msg string, args ...interface{})
-	Infof(format string, args ...interface{})
-	Warn(msg string, args ...interface{})
-	Warnf(format string, args ...interface{})
-	Error(msg string, args ...interface{})
-	Errorf(format string, args ...interface{})
-}
-
 // Event 事件结构
 type Event struct {
 	Type      string

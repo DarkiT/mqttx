@@ -73,8 +73,9 @@ func (m *Manager) SetLogger(logger Logger) Logger {
 	if logger == nil {
 		m.logger = newLogger()
 		return m.logger
+	} else {
+		m.logger = logger
 	}
-	m.logger = logger
 	return m.logger
 }
 
