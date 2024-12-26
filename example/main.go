@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -174,10 +173,7 @@ func main() {
 	}
 
 	// 8. 定期发布消息的示例
-	var wg sync.WaitGroup
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
 		ticker := time.NewTicker(10 * time.Millisecond)
 		defer ticker.Stop()
 
@@ -341,7 +337,4 @@ func main() {
 
 	// 关闭管理器
 	m.Close()
-
-	// 等待发布器关闭
-	wg.Wait()
 }

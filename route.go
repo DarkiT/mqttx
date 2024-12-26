@@ -31,13 +31,24 @@ func newRoute(topic string, session string, manager *Manager, qos byte) *Route {
 
 // Stop 停止路由订阅
 func (r *Route) Stop() {
+	if r == nil {
+		return
+	}
+
 	r.once.Do(func() {
+		if r.manager == nil {
+			return
+		}
+
 		if r.session == "" {
 			r.manager.UnsubscribeAll(r.topic)
 		} else {
 			r.manager.UnsubscribeTo(r.session, r.topic)
 		}
-		close(r.done)
+
+		if r.done != nil {
+			close(r.done)
+		}
 		if r.messages != nil {
 			close(r.messages)
 		}
