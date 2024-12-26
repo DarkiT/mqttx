@@ -17,6 +17,8 @@ const (
 	DefaultMessageChanSize      = 100
 	DefaultMaxMessageSize       = 32 * 1024 // 32KB
 	DefaultMaxPendingMessages   = 1000
+	DefaultWriteBufferSize      = 4096
+	DefaultReadBufferSize       = 4096
 )
 
 // 会话状态常量

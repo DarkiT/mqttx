@@ -74,21 +74,6 @@ func (s *Session) init() error {
 	}
 
 	props := s.opts.ConnectProps
-
-	// 设置默认值（如果未设置）
-	if props.ConnectTimeout == 0 {
-		props.ConnectTimeout = DefaultConnectTimeout
-	}
-	if props.MaxReconnectInterval == 0 {
-		props.MaxReconnectInterval = DefaultMaxReconnectInterval
-	}
-	if props.WriteTimeout == 0 {
-		props.WriteTimeout = DefaultWriteTimeout
-	}
-	if props.KeepAlive == 0 {
-		props.KeepAlive = DefaultKeepAlive
-	}
-
 	// 配置MQTT客户端选项
 	mqttOpts.SetKeepAlive(time.Duration(props.KeepAlive) * time.Second)
 	mqttOpts.SetCleanSession(props.CleanSession)

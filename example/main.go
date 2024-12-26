@@ -55,14 +55,14 @@ func main() {
 		Password:    "pass",
 		StoragePath: storageDir,
 		ConnectProps: &manager.ConnectProps{
-			KeepAlive:            60,
-			CleanSession:         false,
-			AutoReconnect:        true,
-			ConnectTimeout:       30 * time.Second,
-			MaxReconnectInterval: 120 * time.Second,
-			WriteTimeout:         30 * time.Second,
-			ResumeSubs:           true,
-			PersistentSession:    true,
+			CleanSession:  false,
+			AutoReconnect: true,
+			// KeepAlive:            60,
+			// ConnectTimeout:       30 * time.Second,
+			// MaxReconnectInterval: 120 * time.Second,
+			// WriteTimeout:         30 * time.Second,
+			// ResumeSubs:           true,
+			// PersistentSession:    true,
 		},
 	}
 

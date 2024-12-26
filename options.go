@@ -23,8 +23,8 @@ func DefaultOptions() *Options {
 			PersistentSession:    false,
 		},
 		Performance: &PerformanceOptions{
-			WriteBufferSize:    4096,
-			ReadBufferSize:     4096,
+			WriteBufferSize:    DefaultWriteBufferSize,
+			ReadBufferSize:     DefaultReadBufferSize,
 			MessageChanSize:    DefaultMessageChanSize,
 			MaxMessageSize:     DefaultMaxMessageSize,
 			MaxPendingMessages: DefaultMaxPendingMessages,
@@ -50,17 +50,17 @@ func (o *Options) Validate() error {
 	if o.ConnectProps == nil {
 		o.ConnectProps = DefaultOptions().ConnectProps
 	} else {
-		if o.ConnectProps.KeepAlive < 0 {
-			return fmt.Errorf("invalid keepalive value: %d", o.ConnectProps.KeepAlive)
+		if o.ConnectProps.KeepAlive <= 0 {
+			o.ConnectProps.KeepAlive = DefaultKeepAlive
 		}
-		if o.ConnectProps.ConnectTimeout < 0 {
-			return fmt.Errorf("invalid connect timeout: %d", o.ConnectProps.ConnectTimeout)
+		if o.ConnectProps.ConnectTimeout <= 0 {
+			o.ConnectProps.ConnectTimeout = DefaultConnectTimeout
 		}
-		if o.ConnectProps.MaxReconnectInterval < 0 {
-			return fmt.Errorf("invalid max reconnect interval: %d", o.ConnectProps.MaxReconnectInterval)
+		if o.ConnectProps.MaxReconnectInterval <= 0 {
+			o.ConnectProps.MaxReconnectInterval = DefaultMaxReconnectInterval
 		}
-		if o.ConnectProps.WriteTimeout < 0 {
-			return fmt.Errorf("invalid write timeout: %d", o.ConnectProps.WriteTimeout)
+		if o.ConnectProps.WriteTimeout <= 0 {
+			o.ConnectProps.WriteTimeout = DefaultWriteTimeout
 		}
 	}
 
@@ -68,20 +68,20 @@ func (o *Options) Validate() error {
 	if o.Performance == nil {
 		o.Performance = DefaultOptions().Performance
 	} else {
-		if o.Performance.WriteBufferSize < 0 {
-			return fmt.Errorf("invalid write buffer size: %d", o.Performance.WriteBufferSize)
+		if o.Performance.WriteBufferSize <= 0 {
+			o.Performance.WriteBufferSize = DefaultWriteBufferSize
 		}
-		if o.Performance.ReadBufferSize < 0 {
-			return fmt.Errorf("invalid read buffer size: %d", o.Performance.ReadBufferSize)
+		if o.Performance.ReadBufferSize <= 0 {
+			o.Performance.ReadBufferSize = DefaultReadBufferSize
 		}
-		if o.Performance.MessageChanSize < 0 {
-			return fmt.Errorf("invalid message channel size: %d", o.Performance.MessageChanSize)
+		if o.Performance.MessageChanSize <= 0 {
+			o.Performance.MessageChanSize = DefaultMessageChanSize
 		}
-		if o.Performance.MaxMessageSize < 0 {
-			return fmt.Errorf("invalid max message size: %d", o.Performance.MaxMessageSize)
+		if o.Performance.MaxMessageSize <= 0 {
+			o.Performance.MaxMessageSize = DefaultMaxMessageSize
 		}
-		if o.Performance.MaxPendingMessages < 0 {
-			return fmt.Errorf("invalid max pending messages: %d", o.Performance.MaxPendingMessages)
+		if o.Performance.MaxPendingMessages <= 0 {
+			o.Performance.MaxPendingMessages = DefaultMaxPendingMessages
 		}
 	}
 
