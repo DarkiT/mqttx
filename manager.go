@@ -355,9 +355,7 @@ func (m *Manager) WaitForSession(name string, timeout time.Duration) error {
 
 // WaitForAllSessions 等待所有会话连接成功
 func (m *Manager) WaitForAllSessions(timeout time.Duration) error {
-	m.logger.Info("Starting to wait for all sessions",
-		"session_count", len(m.ListSessions()),
-		"timeout", timeout)
+	m.logger.Info("Starting to wait for all sessions", "session_count", len(m.ListSessions()), "timeout", timeout)
 
 	sessions := m.ListSessions()
 	if len(sessions) == 0 {

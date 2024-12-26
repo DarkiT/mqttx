@@ -76,13 +76,23 @@ func slogArgs(args []interface{}) []any {
 		return nil
 	}
 
-	slogArgs := make([]any, len(args))
-	for i, arg := range args {
-		switch v := arg.(type) {
+	// 确保参数是成对的
+	if len(args)%2 != 0 {
+		return []any{slog.String("error", "odd number of log arguments")}
+	}
+
+	slogArgs := make([]any, len(args)/2)
+	for i := 0; i < len(args); i += 2 {
+		key, ok := args[i].(string)
+		if !ok {
+			key = fmt.Sprintf("%v", i)
+		}
+		value := args[i+1]
+		switch v := value.(type) {
 		case error:
-			slogArgs[i] = slog.String("error", v.Error())
+			slogArgs[i/2] = slog.String(key, v.Error())
 		default:
-			slogArgs[i] = slog.Any(fmt.Sprintf("arg%d", i), v)
+			slogArgs[i/2] = slog.Any(key, v)
 		}
 	}
 	return slogArgs
