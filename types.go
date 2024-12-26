@@ -42,31 +42,6 @@ const (
 	EventStateChanged        = "session_state_changed" // 会话状态已改变
 )
 
-// LogLevel 日志级别
-type LogLevel int
-
-const (
-	LogLevelDebug LogLevel = iota
-	LogLevelInfo
-	LogLevelWarn
-	LogLevelError
-)
-
-func (l LogLevel) String() string {
-	switch l {
-	case LogLevelDebug:
-		return "DEBUG"
-	case LogLevelInfo:
-		return "INFO"
-	case LogLevelWarn:
-		return "WARN"
-	case LogLevelError:
-		return "ERROR"
-	default:
-		return "UNKNOWN"
-	}
-}
-
 // Manager 管理多个MQTT会话
 type Manager struct {
 	sessions map[string]*Session
