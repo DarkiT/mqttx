@@ -13,7 +13,7 @@ func NewSessionManager() *Manager {
 	m := &Manager{
 		sessions: make(map[string]*Session),
 		events:   newEventManager(),
-		logger:   newDefaultLogger(),
+		logger:   newLogger(),
 		metrics:  newMetrics(),
 	}
 
@@ -24,7 +24,7 @@ func NewSessionManager() *Manager {
 
 		var lastMessageCount uint64
 		var lastByteCount uint64
-		var lastTime = time.Now()
+		lastTime := time.Now()
 
 		for range ticker.C {
 			currentTime := time.Now()
@@ -69,12 +69,13 @@ func NewSessionManager() *Manager {
 }
 
 // SetLogger 设置日志记录器
-func (m *Manager) SetLogger(logger Logger) {
+func (m *Manager) SetLogger(logger Logger) Logger {
 	if logger == nil {
-		m.logger = newDefaultLogger()
-		return
+		m.logger = newLogger()
+		return m.logger
 	}
 	m.logger = logger
+	return m.logger
 }
 
 // AddSession 添加新的MQTT会话
@@ -354,6 +355,10 @@ func (m *Manager) WaitForSession(name string, timeout time.Duration) error {
 
 // WaitForAllSessions 等待所有会话连接成功
 func (m *Manager) WaitForAllSessions(timeout time.Duration) error {
+	m.logger.Info("Starting to wait for all sessions",
+		"session_count", len(m.ListSessions()),
+		"timeout", timeout)
+
 	sessions := m.ListSessions()
 	if len(sessions) == 0 {
 		return errors.New("no sessions available")

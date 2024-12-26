@@ -68,18 +68,44 @@ func (s *Session) init() error {
 	mqttOpts.SetUsername(s.opts.Username)
 	mqttOpts.SetPassword(s.opts.Password)
 
+	// 确保连接属性存在且设置了默认值
 	if s.opts.ConnectProps == nil {
 		s.opts.ConnectProps = DefaultOptions().ConnectProps
 	}
 
-	// 配置连接属性
 	props := s.opts.ConnectProps
+
+	// 设置默认值（如果未设置）
+	if props.ConnectTimeout == 0 {
+		props.ConnectTimeout = DefaultConnectTimeout
+	}
+	if props.MaxReconnectInterval == 0 {
+		props.MaxReconnectInterval = DefaultMaxReconnectInterval
+	}
+	if props.WriteTimeout == 0 {
+		props.WriteTimeout = DefaultWriteTimeout
+	}
+	if props.KeepAlive == 0 {
+		props.KeepAlive = DefaultKeepAlive
+	}
+
+	// 配置MQTT客户端选项
 	mqttOpts.SetKeepAlive(time.Duration(props.KeepAlive) * time.Second)
 	mqttOpts.SetCleanSession(props.CleanSession)
 	mqttOpts.SetAutoReconnect(props.AutoReconnect)
-	mqttOpts.SetConnectTimeout(time.Duration(props.ConnectTimeout) * time.Second)
-	mqttOpts.SetMaxReconnectInterval(time.Duration(props.MaxReconnectInterval) * time.Second)
-	mqttOpts.SetWriteTimeout(time.Duration(props.WriteTimeout) * time.Second)
+	mqttOpts.SetConnectTimeout(props.ConnectTimeout)
+	mqttOpts.SetMaxReconnectInterval(props.MaxReconnectInterval)
+	mqttOpts.SetWriteTimeout(props.WriteTimeout)
+
+	// 调试日志
+	s.manager.logger.Debug("Configuring connection properties",
+		"session", s.name,
+		"keepalive", props.KeepAlive,
+		"clean_session", props.CleanSession,
+		"auto_reconnect", props.AutoReconnect,
+		"connect_timeout", props.ConnectTimeout,
+		"max_reconnect_interval", props.MaxReconnectInterval,
+		"write_timeout", props.WriteTimeout)
 
 	// 配置性能选项
 	if s.opts.Performance != nil {
@@ -105,11 +131,10 @@ func (s *Session) init() error {
 	mqttOpts.SetReconnectingHandler(func(c mqtt.Client, opts *mqtt.ClientOptions) {
 		s.handleReconnecting()
 	})
-
 	s.client = mqtt.NewClient(mqttOpts)
 
 	// 启动连接
-	go s.connect()
+	s.connect()
 
 	return nil
 }
@@ -117,14 +142,18 @@ func (s *Session) init() error {
 // connect 连接到MQTT服务器
 func (s *Session) connect() {
 	s.setState(StateConnecting)
+	s.manager.logger.Debug("Attempting connection",
+		"session", s.name,
+		"broker", s.opts.Brokers[0],
+		"client_id", s.opts.ClientID)
+
 	s.manager.events.emit(Event{
 		Type:      EventSessionConnecting,
 		Session:   s.name,
 		Timestamp: time.Now(),
 	})
 
-	token := s.client.Connect()
-	if token.Wait() && token.Error() != nil {
+	if token := s.client.Connect(); token.Wait() && token.Error() != nil {
 		s.manager.logger.Error("Connection failed",
 			"session", s.name,
 			"error", token.Error())

@@ -28,8 +28,8 @@ func DefaultOptions() *Options {
 			MessageChanSize:    DefaultMessageChanSize,
 			MaxMessageSize:     DefaultMaxMessageSize,
 			MaxPendingMessages: DefaultMaxPendingMessages,
-			WriteTimeout:       time.Second * 30,
-			ReadTimeout:        time.Second * 30,
+			WriteTimeout:       DefaultWriteTimeout,
+			ReadTimeout:        DefaultWriteTimeout,
 		},
 	}
 }
@@ -210,7 +210,7 @@ func (o *Options) WithReconnect(autoReconnect bool, maxInterval int64) *Options 
 		o.ConnectProps = DefaultOptions().ConnectProps
 	}
 	o.ConnectProps.AutoReconnect = autoReconnect
-	o.ConnectProps.MaxReconnectInterval = maxInterval
+	o.ConnectProps.MaxReconnectInterval = time.Duration(maxInterval) * time.Second
 	return o
 }
 
@@ -219,8 +219,8 @@ func (o *Options) WithTimeout(connect, write int64) *Options {
 	if o.ConnectProps == nil {
 		o.ConnectProps = DefaultOptions().ConnectProps
 	}
-	o.ConnectProps.ConnectTimeout = connect
-	o.ConnectProps.WriteTimeout = write
+	o.ConnectProps.ConnectTimeout = time.Duration(connect) * time.Second
+	o.ConnectProps.WriteTimeout = time.Duration(write) * time.Second
 	return o
 }
 

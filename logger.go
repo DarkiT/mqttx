@@ -4,64 +4,54 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 )
 
-// DefaultLogger 默认日志记录器
-type DefaultLogger struct {
+// defaultLogger 默认日志记录器
+type defaultLogger struct {
 	logger *slog.Logger
 }
 
-// newDefaultLogger 创建一个新的默认日志记录器
-func newDefaultLogger() *DefaultLogger {
-	opts := &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-		// 添加调用者信息到日志
-		AddSource: true,
-	}
-
-	handler := slog.NewTextHandler(os.Stdout, opts)
-	logger := slog.New(handler)
-
-	return &DefaultLogger{
-		logger: logger,
+// newLogger 创建一个新的默认日志记录器
+func newLogger() *defaultLogger {
+	return &defaultLogger{
+		logger: slog.Default(),
 	}
 }
 
-func (l *DefaultLogger) Debug(msg string, args ...interface{}) {
+func (l *defaultLogger) Debug(msg string, args ...interface{}) {
 	l.logger.Debug(msg, slogArgs(args)...)
 }
 
-func (l *DefaultLogger) Debugf(format string, args ...interface{}) {
+func (l *defaultLogger) Debugf(format string, args ...interface{}) {
 	l.logger.Debug(sprintf(format, args...))
 }
 
-func (l *DefaultLogger) Info(msg string, args ...interface{}) {
+func (l *defaultLogger) Info(msg string, args ...interface{}) {
 	l.logger.Info(msg, slogArgs(args)...)
 }
 
-func (l *DefaultLogger) Infof(format string, args ...interface{}) {
+func (l *defaultLogger) Infof(format string, args ...interface{}) {
 	l.logger.Info(sprintf(format, args...))
 }
 
-func (l *DefaultLogger) Warn(msg string, args ...interface{}) {
+func (l *defaultLogger) Warn(msg string, args ...interface{}) {
 	l.logger.Warn(msg, slogArgs(args)...)
 }
 
-func (l *DefaultLogger) Warnf(format string, args ...interface{}) {
+func (l *defaultLogger) Warnf(format string, args ...interface{}) {
 	l.logger.Warn(sprintf(format, args...))
 }
 
-func (l *DefaultLogger) Error(msg string, args ...interface{}) {
+func (l *defaultLogger) Error(msg string, args ...interface{}) {
 	l.logger.Error(msg, slogArgs(args)...)
 }
 
-func (l *DefaultLogger) Errorf(format string, args ...interface{}) {
+func (l *defaultLogger) Errorf(format string, args ...interface{}) {
 	l.logger.Error(sprintf(format, args...))
 }
 
-func (l *DefaultLogger) logWithFields(level LogLevel, msg string, fields map[string]interface{}) {
+func (l *defaultLogger) logWithFields(level LogLevel, msg string, fields map[string]interface{}) {
 	if fields == nil {
 		fields = make(map[string]interface{})
 	}

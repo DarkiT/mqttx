@@ -8,6 +8,17 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// 默认配置常量
+const (
+	DefaultKeepAlive            = 60
+	DefaultConnectTimeout       = 30 * time.Second
+	DefaultMaxReconnectInterval = 120 * time.Second
+	DefaultWriteTimeout         = 30 * time.Second
+	DefaultMessageChanSize      = 100
+	DefaultMaxMessageSize       = 32 * 1024 // 32KB
+	DefaultMaxPendingMessages   = 1000
+)
+
 // 会话状态常量
 const (
 	StateDisconnected uint32 = iota
@@ -101,14 +112,14 @@ type TLSConfig struct {
 
 // ConnectProps 连接属性
 type ConnectProps struct {
-	KeepAlive            uint16
+	KeepAlive            int
 	CleanSession         bool
 	AutoReconnect        bool
-	ConnectTimeout       int64
-	MaxReconnectInterval int64
-	WriteTimeout         int64
-	ResumeSubs           bool // 重连后是否恢复订阅
-	PersistentSession    bool // 是否持久化会话
+	ConnectTimeout       time.Duration
+	MaxReconnectInterval time.Duration
+	WriteTimeout         time.Duration
+	ResumeSubs           bool
+	PersistentSession    bool
 }
 
 // PerformanceOptions 性能相关配置
@@ -259,14 +270,3 @@ type Event struct {
 	Data      interface{}
 	Timestamp time.Time
 }
-
-// 默认配置常量
-const (
-	DefaultKeepAlive            = 60
-	DefaultConnectTimeout       = 30
-	DefaultMaxReconnectInterval = 120
-	DefaultWriteTimeout         = 30
-	DefaultMessageChanSize      = 100
-	DefaultMaxMessageSize       = 32 * 1024 // 32KB
-	DefaultMaxPendingMessages   = 1000
-)

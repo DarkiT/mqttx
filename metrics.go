@@ -150,7 +150,7 @@ func (m *Metrics) rateUpdater() {
 
 	var lastMessageCount uint64
 	var lastByteCount uint64
-	var lastTime = time.Now()
+	lastTime := time.Now()
 
 	for range ticker.C {
 		currentTime := time.Now()

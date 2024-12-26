@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	manager "github.com/darkit/mqttx"
-	"github.com/darkit/slog"
 )
 
 // SensorData 传感器数据结构
@@ -24,21 +24,24 @@ type SensorData struct {
 	Timestamp   time.Time `json:"timestamp"`
 }
 
-func init() {
-	slog.SetLevelDebug()
-	slog.NewLogger(os.Stdout, true, false)
-}
-
 func main() {
+	// 创建带取消的上下文
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 创建信号通道并在收到信号时取消上下文
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cancel() // 取消上下文
+	}()
+
 	// 创建会话管理器
 	m := manager.NewSessionManager()
 
 	// 设置自定义日志记录器
-	m.SetLogger(slog.Default("mqtt"))
-
-	// 创建信号通道用于优雅退出
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	slog := m.SetLogger(nil)
 
 	// 创建存储目录
 	storageDir := filepath.Join(os.TempDir(), "mqtt-sessions")
@@ -53,22 +56,20 @@ func main() {
 		Password:    "pass",
 		StoragePath: storageDir,
 		ConnectProps: &manager.ConnectProps{
-			KeepAlive:         60,
-			CleanSession:      false,
-			AutoReconnect:     true,
-			PersistentSession: true,
-			ResumeSubs:        true,
-		},
-		Performance: &manager.PerformanceOptions{
-			MessageChanSize:    1000,
-			MaxPendingMessages: 5000,
-			WriteTimeout:       time.Second * 30,
-			ReadTimeout:        time.Second * 30,
+			KeepAlive:            60,
+			CleanSession:         false,
+			AutoReconnect:        true,
+			ConnectTimeout:       30 * time.Second,
+			MaxReconnectInterval: 120 * time.Second,
+			WriteTimeout:         30 * time.Second,
+			ResumeSubs:           true,
+			PersistentSession:    true,
 		},
 	}
 
 	if err := m.AddSession(persistentOpts); err != nil {
-		slog.Fatalf("Failed to add persistent session: %v", err)
+		slog.Error("Failed to add persistent session", "error", err)
+		os.Exit(1)
 	}
 
 	// 2. 添加临时会话
@@ -77,13 +78,18 @@ func main() {
 		Brokers:  []string{"tcp://broker.emqx.io:1883"},
 		ClientID: "device-002",
 		ConnectProps: &manager.ConnectProps{
-			CleanSession:  true,
-			AutoReconnect: true,
+			KeepAlive:            60,
+			CleanSession:         true,
+			AutoReconnect:        true,
+			ConnectTimeout:       30 * time.Second,
+			MaxReconnectInterval: 120 * time.Second,
+			WriteTimeout:         30 * time.Second,
 		},
 	}
 
 	if err := m.AddSession(tempOpts); err != nil {
-		slog.Fatalf("Failed to add temporary session: %v", err)
+		slog.Error("Failed to add temporary session", "error", err)
+		os.Exit(1)
 	}
 
 	// 等待特定会话连接
@@ -92,41 +98,42 @@ func main() {
 	//}
 
 	// 或者等待所有会话连接
-	slog.Println("Waiting for all sessions to connect...")
+	slog.Info("Waiting for all sessions to connect...")
 	if err := m.WaitForAllSessions(30 * time.Second); err != nil {
-		slog.Fatalf("Failed while waiting for sessions: %v", err)
+		slog.Error("Failed while waiting for sessions", "error", err)
+		os.Exit(1)
 	}
-	slog.Println("All sessions connected successfully")
+	slog.Info("All sessions connected successfully")
 
 	// 3. 注册事件处理
 	m.OnEvent("session_ready", func(event manager.Event) {
 		data := event.Data.(map[string]interface{})
-		slog.Printf("Session %s is ready:", event.Session)
-		slog.Printf("  Connected to: %v", data["connected_broker"])
-		slog.Printf("  Client ID: %v", data["client_id"])
-		slog.Printf("  Subscriptions: %v", data["subscriptions"])
+		slog.Infof("Session %s is ready:", event.Session)
+		slog.Infof("  Connected to: %v", data["connected_broker"])
+		slog.Infof("  Client ID: %v", data["client_id"])
+		slog.Infof("  Subscriptions: %v", data["subscriptions"])
 	})
 
 	m.OnEvent("session_connected", func(event manager.Event) {
-		slog.Printf("Session connected: %s", event.Session)
+		slog.Infof("Session connected: %s", event.Session)
 	})
 
 	m.OnEvent("session_disconnected", func(event manager.Event) {
-		slog.Printf("Session disconnected: %s, reason: %v", event.Session, event.Data)
+		slog.Infof("Session disconnected: %s, reason: %v", event.Session, event.Data)
 	})
 
 	m.OnEvent("session_reconnecting", func(event manager.Event) {
-		slog.Printf("Session reconnecting: %s", event.Session)
+		slog.Infof("Session reconnecting: %s", event.Session)
 	})
 
 	// 4. 使用Handle模式处理消息
 	handleRoute := m.Handle("sensors/+/temperature", func(msg *manager.Message) {
 		var data SensorData
 		if err := msg.PayloadJSON(&data); err != nil {
-			slog.Printf("Failed to parse message: %v", err)
+			slog.Errorf("Failed to parse message: %v", err)
 			return
 		}
-		slog.Printf("Received temperature from %s: %.1f°C", data.DeviceID, data.Temperature)
+		slog.Infof("Received temperature from %s: %.1f°C", data.DeviceID, data.Temperature)
 	})
 	defer handleRoute.Stop()
 
@@ -134,13 +141,13 @@ func main() {
 	handleToRoute, err := m.HandleTo("persistent-device", "sensors/+/humidity", func(msg *manager.Message) {
 		var data SensorData
 		if err := msg.PayloadJSON(&data); err != nil {
-			slog.Printf("Failed to parse message: %v", err)
+			slog.Errorf("Failed to parse message: %v", err)
 			return
 		}
-		slog.Printf("Received humidity from %s: %.1f%%", data.DeviceID, data.Humidity)
+		slog.Infof("Received humidity from %s: %.1f%%", data.DeviceID, data.Humidity)
 	})
 	if err != nil {
-		slog.Printf("Failed to setup HandleTo: %v", err)
+		slog.Infof("Failed to setup HandleTo: %v", err)
 	}
 	defer handleToRoute.Stop()
 
@@ -148,7 +155,7 @@ func main() {
 	messages, listenRoute := m.Listen("sensors/#")
 	go func() {
 		for msg := range messages {
-			slog.Printf("Listen received message on topic %s: %s", msg.Topic, msg.PayloadString())
+			slog.Infof("Listen received message on topic %s: %s", msg.Topic, msg.PayloadString())
 		}
 	}()
 	defer listenRoute.Stop()
@@ -156,11 +163,11 @@ func main() {
 	// 7. 使用ListenTo模式接收特定会话的消息
 	sessionMessages, listenToRoute, err := m.ListenTo("temp-device", "control/#")
 	if err != nil {
-		slog.Printf("Failed to setup ListenTo: %v", err)
+		slog.Infof("Failed to setup ListenTo: %v", err)
 	} else {
 		go func() {
 			for msg := range sessionMessages {
-				slog.Printf("ListenTo received message on topic %s: %s", msg.Topic, msg.PayloadString())
+				slog.Infof("ListenTo received message on topic %s: %s", msg.Topic, msg.PayloadString())
 			}
 		}()
 		defer listenToRoute.Stop()
@@ -187,18 +194,18 @@ func main() {
 				payload, _ := json.Marshal(data)
 
 				// 发布到特定会话
-				if err := m.PublishTo("persistent-device", "sensors/001/temperature", payload, 1); err != nil {
-					slog.Printf("Failed to publish to session: %v", err)
+				if err = m.PublishTo("persistent-device", "sensors/001/temperature", payload, 1); err != nil {
+					slog.Errorf("Failed to publish to session: %v", err)
 				}
 
 				// 发布到所有会话
 				if errors := m.PublishToAll("sensors/broadcast", payload, 0); len(errors) > 0 {
-					slog.Printf("Failed to publish to all sessions: %v", errors)
+					slog.Errorf("Failed to publish to all sessions: %v", errors)
 				}
 
 				// 打印当前状态
 				status := m.GetAllSessionsStatus()
-				slog.Printf("Current session status: %v", status)
+				slog.Infof("Current session status: %v", status)
 
 				// 获取指标
 				metrics := m.GetMetrics()
@@ -232,8 +239,14 @@ func main() {
 					}
 				}
 
-			case <-sigChan:
-				slog.Println("Shutting down publisher...")
+			case <-ctx.Done():
+				slog.Info("Shutting down...")
+				// 清理资源
+				if err := m.RemoveSession("temp-device"); err != nil {
+					slog.Error("Failed to remove temp session", "error", err)
+				}
+				m.DisconnectAll()
+				m.Close()
 				return
 			}
 		}
@@ -243,7 +256,7 @@ func main() {
 	go func() {
 		// 列出所有会话
 		sessions := m.ListSessions()
-		slog.Printf("Active sessions: %v", sessions)
+		slog.Infof("Active sessions: %v", sessions)
 
 		// 获取特定会话
 		if session, err := m.GetSession("persistent-device"); err == nil {
@@ -267,16 +280,16 @@ func main() {
 
 		// 为所有会话订阅
 		if errors := m.SubscribeAll(topic, func(t string, payload []byte) {
-			slog.Printf("SubscribeAll received: %s", string(payload))
+			slog.Infof("SubscribeAll received: %s", string(payload))
 		}, qos); len(errors) > 0 {
-			slog.Printf("SubscribeAll errors: %v", errors)
+			slog.Errorf("SubscribeAll errors: %v", errors)
 		}
 
 		// 为特定会话订阅
-		if err := m.SubscribeTo("persistent-device", topic, func(t string, payload []byte) {
-			slog.Printf("SubscribeTo received: %s", string(payload))
+		if err = m.SubscribeTo("persistent-device", topic, func(t string, payload []byte) {
+			slog.Infof("SubscribeTo received: %s", string(payload))
 		}, qos); err != nil {
-			slog.Printf("SubscribeTo error: %v", err)
+			slog.Errorf("SubscribeTo error: %v", err)
 		}
 	}()
 
@@ -308,19 +321,19 @@ func main() {
 
 		// 启动 HTTP 服务器
 		serverAddr := ":2112" // Prometheus 默认抓取端口为 9090，这里使用 2112 避免冲突
-		slog.Printf("Starting metrics server on %s", serverAddr)
+		slog.Infof("Starting metrics server on %s", serverAddr)
 		if err := http.ListenAndServe(serverAddr, nil); err != nil {
-			slog.Printf("Metrics server error: %v", err)
+			slog.Errorf("Metrics server error: %v", err)
 		}
 	}()
 
 	// 等待中断信号
-	<-sigChan
-	slog.Println("Shutting down...")
+	<-ctx.Done()
+	slog.Info("Shutting down...")
 
 	// 10. 清理资源
 	if err := m.RemoveSession("temp-device"); err != nil {
-		slog.Printf("Failed to remove temp session: %v", err)
+		slog.Errorf("Failed to remove temp session: %v", err)
 	}
 
 	// 断开所有连接
