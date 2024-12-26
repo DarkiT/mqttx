@@ -18,3 +18,4 @@ config/config.toml
 go.sum
 .svn
 *.exe
+*.exe~
