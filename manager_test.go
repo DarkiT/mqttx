@@ -1,4 +1,4 @@
-package mqtt
+package mqttx
 
 import (
 	"encoding/json"
@@ -235,7 +235,7 @@ func TestSessionStatus(t *testing.T) {
 
 // TestDefaultLogger 测试默认日志记录器
 func TestDefaultLogger(t *testing.T) {
-	logger := newDefaultLogger()
+	logger := newLogger()
 
 	// 测试所有日志级别
 	tests := []struct {

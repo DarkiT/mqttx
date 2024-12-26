@@ -1,4 +1,4 @@
-package mqtt
+package mqttx
 
 // newEventManager 创建新的事件管理器
 func newEventManager() *EventManager {
