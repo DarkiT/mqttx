@@ -146,6 +146,7 @@ func (m *Manager) Listen(topic string) (chan *Message, *Route) {
 
 			select {
 			case route.messages <- msg:
+				// 消息成功发送到通道
 			default:
 				atomic.AddUint64(&route.stats.MessagesDropped, 1)
 				m.logger.Warn("Message dropped due to full channel",
@@ -180,6 +181,7 @@ func (m *Manager) ListenTo(session, topic string) (chan *Message, *Route, error)
 
 			select {
 			case route.messages <- msg:
+				// 消息成功发送到通道
 			default:
 				atomic.AddUint64(&route.stats.MessagesDropped, 1)
 				m.logger.Warn("Message dropped due to full channel",
@@ -198,7 +200,7 @@ func (m *Manager) ListenTo(session, topic string) (chan *Message, *Route, error)
 
 // getMessageBufferSize 获取消息缓冲区大小
 func (m *Manager) getMessageBufferSize() int {
-	if m.sessions == nil || len(m.sessions) == 0 {
+	if len(m.sessions) == 0 {
 		return DefaultMessageChanSize
 	}
 

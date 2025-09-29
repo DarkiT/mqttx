@@ -1,77 +1,93 @@
 package mqttx
 
 import (
-	"errors"
-	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// NewSessionManager 创建新的MQTT管理器
+// NewSessionManager 创建新的会话管理器
 func NewSessionManager() *Manager {
 	m := &Manager{
 		sessions: make(map[string]*Session),
 		events:   newEventManager(),
-		logger:   newLogger(),
+		logger:   NewDefaultLogger(),
 		metrics:  newMetrics(),
 	}
 
-	// 启动指标更新器
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-
-		var lastMessageCount uint64
-		var lastByteCount uint64
-		lastTime := time.Now()
-
-		for range ticker.C {
-			currentTime := time.Now()
-
-			// 更新其他指标
-			m.updateMetrics()
-
-			// 获取当前计数
-			currentMessages := atomic.LoadUint64(&m.metrics.TotalMessages)
-			currentBytes := atomic.LoadUint64(&m.metrics.TotalBytes)
-
-			// 计算时间间隔（秒）
-			interval := currentTime.Sub(lastTime).Seconds()
-			if interval > 0 {
-				// 计算消息速率
-				messagesDiff := float64(currentMessages - lastMessageCount)
-				messageRate := messagesDiff / interval
-				m.metrics.rates.messageRate.Store(fmt.Sprintf("%.2f/s", messageRate))
-
-				// 计算数据速率
-				bytesDiff := float64(currentBytes - lastByteCount)
-
-				byteRate := bytesDiff / interval
-				m.metrics.rates.byteRate.Store(formatBytes(uint64(byteRate)) + "/s")
-
-				// 计算平均速率
-				uptime := currentTime.Sub(m.metrics.startTime).Seconds()
-				if uptime > 0 {
-					avgMessageRate := float64(currentMessages) / uptime
-					m.metrics.rates.avgMessageRate.Store(fmt.Sprintf("%.2f/s", avgMessageRate))
-				}
-			}
-
-			// 更新上一次的计数
-			lastMessageCount = currentMessages
-			lastByteCount = currentBytes
-			lastTime = currentTime
-		}
-	}()
+	// 初始化错误恢复管理器
+	m.recovery = NewRecoveryManager(m)
 
 	return m
+}
+
+// RegisterError 注册错误并启动恢复流程
+func (m *Manager) RegisterError(sessionName string, err error, category ErrorCategory) *ErrorInfo {
+	if err != nil {
+		m.metrics.recordError()
+	}
+	return m.recovery.RegisterError(sessionName, err, category)
+}
+
+// GetActiveErrors 获取当前活跃的错误
+func (m *Manager) GetActiveErrors() []*ErrorInfo {
+	return m.recovery.GetActiveErrors()
+}
+
+// GetErrorStats 获取错误统计信息
+func (m *Manager) GetErrorStats() map[string]interface{} {
+	return m.recovery.GetErrorStats()
+}
+
+// SetMaxRetries 设置特定类别错误的最大重试次数
+func (m *Manager) SetMaxRetries(category ErrorCategory, count int) {
+	m.recovery.SetMaxRetries(category, count)
+}
+
+// ClearRecoveredErrors 清理已恢复的错误
+func (m *Manager) ClearRecoveredErrors() int {
+	return m.recovery.ClearRecoveredErrors()
+}
+
+// PublishTo 发布消息到指定会话，增加错误处理
+func (m *Manager) PublishTo(sessionName, topic string, payload []byte, qos byte) error {
+	// 如果设置了测试函数，则使用测试函数
+	if m.publishToFunc != nil {
+		return m.publishToFunc(sessionName, topic, payload, qos)
+	}
+
+	// 正常逻辑
+	session, err := m.GetSession(sessionName)
+	if err != nil {
+		return err
+	}
+
+	err = session.Publish(topic, payload, qos)
+	if err != nil {
+		// 注册错误并启动恢复流程
+		m.RegisterError(sessionName, err, CategoryPublish)
+	}
+	return err
+}
+
+// SubscribeTo 订阅主题，增加错误处理
+func (m *Manager) SubscribeTo(sessionName, topic string, handler MessageHandler, qos byte) error {
+	session, err := m.GetSession(sessionName)
+	if err != nil {
+		return err
+	}
+
+	err = session.Subscribe(topic, handler, qos)
+	if err != nil {
+		// 注册错误并启动恢复流程
+		m.RegisterError(sessionName, err, CategorySubscription)
+	}
+	return err
 }
 
 // SetLogger 设置日志记录器
 func (m *Manager) SetLogger(logger Logger) Logger {
 	if logger == nil {
-		m.logger = newLogger()
+		m.logger = NewDefaultLogger()
 		return m.logger
 	} else {
 		m.logger = logger
@@ -100,7 +116,7 @@ func (m *Manager) AddSession(opts *Options) error {
 	m.sessions[opts.Name] = session
 	m.metrics.updateSessionCount(1)
 
-	m.events.emit(Event{
+	m.events.emit(&Event{
 		Type:      EventSessionAdded,
 		Session:   opts.Name,
 		Timestamp: time.Now(),
@@ -111,6 +127,12 @@ func (m *Manager) AddSession(opts *Options) error {
 
 // GetSession 获取指定会话
 func (m *Manager) GetSession(name string) (*Session, error) {
+	// 如果设置了测试函数，则使用测试函数
+	if m.getSessionFunc != nil {
+		return m.getSessionFunc(name)
+	}
+
+	// 正常逻辑
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -121,31 +143,28 @@ func (m *Manager) GetSession(name string) (*Session, error) {
 	return session, nil
 }
 
-// GetAllSessionsStatus 获取所有会话状态
+// GetAllSessionsStatus 获取所有会话的状态字符串
 func (m *Manager) GetAllSessionsStatus() map[string]string {
+	statusCodes := m.GetAllSessionsStatusCode()
+	result := make(map[string]string)
+
+	for name, code := range statusCodes {
+		result[name] = StatusToString(code)
+	}
+
+	return result
+}
+
+// GetAllSessionsStatusCode 获取所有会话的状态常量
+func (m *Manager) GetAllSessionsStatusCode() map[string]uint32 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	sessions := make(map[string]string, len(m.sessions))
+	result := make(map[string]uint32)
 	for name, session := range m.sessions {
-		status := atomic.LoadUint32(&session.status)
-		switch status {
-		case StateDisconnected:
-			sessions[name] = "disconnected"
-		case StateConnecting:
-			sessions[name] = "connecting"
-		case StateConnected:
-			sessions[name] = "connected"
-		case StateReconnecting:
-			sessions[name] = "reconnecting"
-		case StateClosed:
-			sessions[name] = "closed"
-		default:
-			sessions[name] = "unknown"
-		}
+		result[name] = session.GetSessionStatus()
 	}
-
-	return sessions
+	return result
 }
 
 // RemoveSession 移除会话
@@ -162,7 +181,7 @@ func (m *Manager) RemoveSession(name string) error {
 	delete(m.sessions, name)
 	m.metrics.updateSessionCount(-1)
 
-	m.events.emit(Event{
+	m.events.emit(&Event{
 		Type:      EventSessionRemoved,
 		Session:   name,
 		Timestamp: time.Now(),
@@ -205,28 +224,6 @@ func (m *Manager) PublishToAll(topic string, payload []byte, qos byte) []error {
 	return nil
 }
 
-// PublishTo 向指定会话发布消息
-func (m *Manager) PublishTo(name string, topic string, payload []byte, qos byte) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	session, exists := m.sessions[name]
-	if !exists {
-		return ErrSessionNotFound
-	}
-
-	if err := session.Publish(topic, payload, qos); err != nil {
-		m.metrics.recordError(err)
-		return newSessionError(name, err)
-	}
-
-	if len(payload) > 0 {
-		m.metrics.recordMessage(uint64(len(payload)))
-	}
-
-	return nil
-}
-
 // SubscribeAll 在所有会话中订阅主题
 func (m *Manager) SubscribeAll(topic string, handler MessageHandler, qos byte) []error {
 	m.mu.RLock()
@@ -241,22 +238,6 @@ func (m *Manager) SubscribeAll(topic string, handler MessageHandler, qos byte) [
 
 	if len(_errors) > 0 {
 		return _errors
-	}
-	return nil
-}
-
-// SubscribeTo 向指定会话订阅主题
-func (m *Manager) SubscribeTo(name string, topic string, handler MessageHandler, qos byte) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	session, exists := m.sessions[name]
-	if !exists {
-		return ErrSessionNotFound
-	}
-
-	if err := session.Subscribe(topic, handler, qos); err != nil {
-		return newSessionError(name, err)
 	}
 	return nil
 }
@@ -306,11 +287,15 @@ func (m *Manager) DisconnectAll() {
 }
 
 // OnEvent 注册事件处理函数
-func (m *Manager) OnEvent(eventType string, handler EventHandler) {
-	m.events.on(eventType, handler)
+func (m *Manager) OnEvent(eventType string, handler func(event Event)) {
+	// 转换为接受*Event参数的处理函数
+	wrappedHandler := func(event *Event) {
+		handler(*event)
+	}
+	m.events.on(eventType, wrappedHandler)
 }
 
-// GetMetrics 获取管理器指标
+// GetMetrics 获取指标信息
 func (m *Manager) GetMetrics() map[string]interface{} {
 	return m.metrics.getSnapshot()
 }
@@ -350,7 +335,8 @@ func (m *Manager) WaitForSession(name string, timeout time.Duration) error {
 	case <-connected:
 		return nil
 	case <-timer.C:
-		return fmt.Errorf("timeout waiting for session %s to connect", name)
+		return NewConnectionError("timeout waiting for session to connect", ErrTimeout).
+			WithSession(name)
 	}
 }
 
@@ -360,7 +346,7 @@ func (m *Manager) WaitForAllSessions(timeout time.Duration) error {
 
 	sessions := m.ListSessions()
 	if len(sessions) == 0 {
-		return errors.New("no sessions available")
+		return NewConfigError("no sessions available", nil)
 	}
 
 	timer := time.NewTimer(timeout)
@@ -375,7 +361,12 @@ func (m *Manager) WaitForAllSessions(timeout time.Duration) error {
 		go func(sessionName string) {
 			defer wg.Done()
 			if err := m.WaitForSession(sessionName, timeout); err != nil {
-				errChan <- fmt.Errorf("session %s: %w", sessionName, err)
+				if mqttErr, ok := err.(*MQTTXError); ok {
+					mqttErr.WithSession(sessionName)
+					errChan <- mqttErr
+				} else {
+					errChan <- NewConnectionError("session connection failed", err).WithSession(sessionName)
+				}
 			}
 		}(name)
 	}
@@ -396,51 +387,19 @@ func (m *Manager) WaitForAllSessions(timeout time.Duration) error {
 			_errors = append(_errors, err)
 		}
 		if len(_errors) > 0 {
-			return fmt.Errorf("failed to connect all sessions: %v", _errors)
+			validationErrs := NewValidationErrors()
+			for _, err := range _errors {
+				validationErrs.Add(err)
+			}
+			return validationErrs
 		}
 		return nil
 	case <-timer.C:
-		return errors.New("timeout waiting for all sessions to connect")
+		return NewConnectionError("timeout waiting for all sessions to connect", ErrTimeout)
 	}
 }
 
 // Close 关闭管理器
 func (m *Manager) Close() {
 	m.DisconnectAll()
-}
-
-// updateMetrics 更新管理器级别的指标
-func (m *Manager) updateMetrics() {
-	var totalMessages, totalBytes uint64
-	var totalErrors, totalReconnects uint64
-
-	// 汇总所有会话的指标
-	m.mu.RLock()
-	for _, session := range m.sessions {
-		metrics := session.GetMetrics()
-		// 分别获取发送和接收的消息数
-		sent := metrics["messages_sent"].(uint64)
-		received := metrics["messages_received"].(uint64)
-		totalMessages += sent + received
-
-		// 分别获取发送和接收的字节数
-		bytesSent := metrics["bytes_sent"].(uint64)
-		bytesReceived := metrics["bytes_received"].(uint64)
-		totalBytes += bytesSent + bytesReceived
-
-		totalErrors += metrics["errors"].(uint64)
-		totalReconnects += metrics["reconnects"].(uint64)
-	}
-	m.mu.RUnlock()
-
-	// 原子操作更新指标
-	atomic.StoreUint64(&m.metrics.TotalMessages, totalMessages)
-	atomic.StoreUint64(&m.metrics.TotalBytes, totalBytes)
-	atomic.StoreUint64(&m.metrics.ErrorCount, totalErrors)
-	atomic.StoreUint64(&m.metrics.ReconnectCount, totalReconnects)
-
-	// 更新最后更新时间
-	m.metrics.mu.Lock()
-	m.metrics.LastUpdate = time.Now()
-	m.metrics.mu.Unlock()
 }

@@ -1,6 +1,7 @@
 package mqttx
 
 import (
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -9,18 +10,38 @@ import (
 	"time"
 )
 
+// randomClientID 生成随机的客户端ID
+func randomClientID() int64 {
+	b := make([]byte, 8)
+	rand.Read(b)
+	val := int64(0)
+	for i := 0; i < 8; i++ {
+		val = (val << 8) | int64(b[i])
+	}
+	return val & 0x7FFFFFFFFFFFFFFF // 确保为正数
+}
+
 // DefaultOptions 返回默认选项
 func DefaultOptions() *Options {
 	return &Options{
+		Name:     "default",
+		Brokers:  []string{"tcp://localhost:1883"},
+		Username: "",
+		Password: "",
+		ClientID: fmt.Sprintf("mqttx-%d", randomClientID()),
+		Topics:   []TopicConfig{},
+		Storage:  DefaultStorageOptions(),
 		ConnectProps: &ConnectProps{
-			KeepAlive:            DefaultKeepAlive,
-			CleanSession:         true,
-			AutoReconnect:        true,
-			ConnectTimeout:       DefaultConnectTimeout,
-			MaxReconnectInterval: DefaultMaxReconnectInterval,
-			WriteTimeout:         DefaultWriteTimeout,
-			ResumeSubs:           true,
-			PersistentSession:    false,
+			KeepAlive:                DefaultKeepAlive,
+			CleanSession:             true,
+			AutoReconnect:            true,
+			ConnectTimeout:           DefaultConnectTimeout,
+			InitialReconnectInterval: DefaultInitialReconnectInterval,
+			MaxReconnectInterval:     DefaultMaxReconnectInterval,
+			BackoffFactor:            DefaultBackoffFactor,
+			WriteTimeout:             DefaultWriteTimeout,
+			ResumeSubs:               true,
+			PersistentSession:        false,
 		},
 		Performance: &PerformanceOptions{
 			WriteBufferSize:    DefaultWriteBufferSize,
@@ -56,8 +77,14 @@ func (o *Options) Validate() error {
 		if o.ConnectProps.ConnectTimeout <= 0 {
 			o.ConnectProps.ConnectTimeout = DefaultConnectTimeout
 		}
+		if o.ConnectProps.InitialReconnectInterval <= 0 {
+			o.ConnectProps.InitialReconnectInterval = DefaultInitialReconnectInterval
+		}
 		if o.ConnectProps.MaxReconnectInterval <= 0 {
 			o.ConnectProps.MaxReconnectInterval = DefaultMaxReconnectInterval
+		}
+		if o.ConnectProps.BackoffFactor <= 0 {
+			o.ConnectProps.BackoffFactor = DefaultBackoffFactor
 		}
 		if o.ConnectProps.WriteTimeout <= 0 {
 			o.ConnectProps.WriteTimeout = DefaultWriteTimeout
@@ -92,6 +119,34 @@ func (o *Options) Validate() error {
 		}
 		if topic.QoS > 2 {
 			return ErrQoSNotSupported
+		}
+	}
+
+	// 验证存储选项
+	if o.Storage == nil {
+		o.Storage = DefaultStorageOptions()
+	} else {
+		// 验证存储类型
+		switch o.Storage.Type {
+		case StoreTypeFile:
+			if o.Storage.Path == "" {
+				return errors.New("storage path cannot be empty for file store")
+			}
+		case StoreTypeRedis:
+			if o.Storage.Redis == nil {
+				o.Storage.Redis = DefaultRedisOptions()
+			} else {
+				if o.Storage.Redis.Addr == "" {
+					return errors.New("redis address cannot be empty")
+				}
+				if o.Storage.Redis.TTL <= 0 {
+					o.Storage.Redis.TTL = 86400 // 默认24小时
+				}
+			}
+		case StoreTypeMemory:
+			// 内存存储不需要额外验证
+		default:
+			o.Storage.Type = StoreTypeMemory // 默认使用内存存储
 		}
 	}
 
@@ -205,13 +260,30 @@ func (o *Options) WithPersistence(enabled bool) *Options {
 }
 
 // WithReconnect 设置重连选项
-func (o *Options) WithReconnect(autoReconnect bool, maxInterval int64) *Options {
+func (o *Options) WithReconnect(autoReconnect bool, initialInterval, maxInterval int64, backoffFactor float64) *Options {
 	if o.ConnectProps == nil {
 		o.ConnectProps = DefaultOptions().ConnectProps
 	}
 	o.ConnectProps.AutoReconnect = autoReconnect
-	o.ConnectProps.MaxReconnectInterval = time.Duration(maxInterval) * time.Second
+
+	if initialInterval > 0 {
+		o.ConnectProps.InitialReconnectInterval = time.Duration(initialInterval) * time.Second
+	}
+
+	if maxInterval > 0 {
+		o.ConnectProps.MaxReconnectInterval = time.Duration(maxInterval) * time.Second
+	}
+
+	if backoffFactor > 0 {
+		o.ConnectProps.BackoffFactor = backoffFactor
+	}
+
 	return o
+}
+
+// WithSimpleReconnect 设置简化版重连选项
+func (o *Options) WithSimpleReconnect(autoReconnect bool, maxInterval int64) *Options {
+	return o.WithReconnect(autoReconnect, 0, maxInterval, 0)
 }
 
 // WithTimeout 设置超时选项
@@ -237,5 +309,104 @@ func (o *Options) WithCleanSession(clean bool) *Options {
 func (o *Options) WithAuth(username, password string) *Options {
 	o.Username = username
 	o.Password = password
+	return o
+}
+
+// StoreType 存储类型
+type StoreType string
+
+const (
+	// StoreTypeMemory 内存存储
+	StoreTypeMemory StoreType = "memory"
+	// StoreTypeFile 文件存储
+	StoreTypeFile StoreType = "file"
+	// StoreTypeRedis Redis存储
+	StoreTypeRedis StoreType = "redis"
+)
+
+// StorageOptions 存储选项
+type StorageOptions struct {
+	// Type 存储类型: "memory", "file", 或 "redis"
+	Type StoreType
+	// Path 文件存储路径，仅在Type="file"时有效
+	Path string
+	// Redis Redis存储选项，仅在Type="redis"时有效
+	Redis *RedisOptions
+}
+
+// RedisOptions Redis配置选项
+type RedisOptions struct {
+	// Addr Redis服务器地址，格式为 "host:port"
+	Addr string
+	// Username Redis用户名
+	Username string
+	// Password Redis密码
+	Password string
+	// DB Redis数据库索引
+	DB int
+	// KeyPrefix 键前缀
+	KeyPrefix string
+	// TTL 会话状态的生存时间
+	TTL int64 // 秒
+	// PoolSize 连接池大小
+	PoolSize int
+}
+
+// DefaultRedisOptions 返回默认的Redis选项
+func DefaultRedisOptions() *RedisOptions {
+	return &RedisOptions{
+		Addr:      "localhost:6379",
+		Username:  "",
+		Password:  "",
+		DB:        0,
+		KeyPrefix: "mqttx:session:",
+		TTL:       86400, // 24小时
+		PoolSize:  10,
+	}
+}
+
+// DefaultStorageOptions 返回默认的存储选项
+func DefaultStorageOptions() *StorageOptions {
+	return &StorageOptions{
+		Type:  StoreTypeMemory,
+		Path:  "",
+		Redis: DefaultRedisOptions(),
+	}
+}
+
+// WithStorage 设置存储选项
+func (o *Options) WithStorage(storeType StoreType, path string) *Options {
+	if o.Storage == nil {
+		o.Storage = DefaultStorageOptions()
+	}
+	o.Storage.Type = storeType
+	o.Storage.Path = path
+	return o
+}
+
+// WithRedisStorage 设置Redis存储选项
+func (o *Options) WithRedisStorage(addr, username, password string, db int, keyPrefix string, ttl int64) *Options {
+	if o.Storage == nil {
+		o.Storage = DefaultStorageOptions()
+	}
+	o.Storage.Type = StoreTypeRedis
+
+	if o.Storage.Redis == nil {
+		o.Storage.Redis = DefaultRedisOptions()
+	}
+
+	o.Storage.Redis.Addr = addr
+	o.Storage.Redis.Username = username
+	o.Storage.Redis.Password = password
+	o.Storage.Redis.DB = db
+
+	if keyPrefix != "" {
+		o.Storage.Redis.KeyPrefix = keyPrefix
+	}
+
+	if ttl > 0 {
+		o.Storage.Redis.TTL = ttl
+	}
+
 	return o
 }

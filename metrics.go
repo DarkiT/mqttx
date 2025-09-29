@@ -2,38 +2,26 @@ package mqttx
 
 import (
 	"fmt"
-	"reflect"
 	"sync/atomic"
 	"time"
 )
 
-// 添加速率格式化常量
-const (
-	UnitMsg  = "msg/s"
-	UnitByte = "B/s"
-)
-
 // newMetrics 创建新的指标收集器
 func newMetrics() *Metrics {
-	now := time.Now()
-	m := &Metrics{
-		startTime:  now,
-		LastUpdate: now,
-		rates: &RateCounter{
-			messageRate:    &atomic.Value{},
-			byteRate:       &atomic.Value{},
-			avgMessageRate: &atomic.Value{},
-		},
+	now := time.Now().UnixNano()
+	return &Metrics{
+		LastUpdate:      now,
+		LastMessageTime: now,
+		LastErrorTime:   now,
 	}
-	// 启动速率更新器
-	go m.rateUpdater()
-	return m
 }
 
 // newSessionMetrics 创建新的会话指标收集器
 func newSessionMetrics() *SessionMetrics {
+	now := time.Now().UnixNano()
 	return &SessionMetrics{
-		LastMessage: time.Now(),
+		LastMessage: now,
+		LastError:   now,
 	}
 }
 
@@ -41,20 +29,33 @@ func newSessionMetrics() *SessionMetrics {
 func (m *Metrics) recordMessage(bytes uint64) {
 	atomic.AddUint64(&m.TotalMessages, 1)
 	atomic.AddUint64(&m.TotalBytes, bytes)
-	m.mu.Lock()
-	m.LastUpdate = time.Now()
-	m.mu.Unlock()
+	now := time.Now().UnixNano()
+	atomic.StoreInt64(&m.LastUpdate, now)
+	atomic.StoreInt64(&m.LastMessageTime, now)
 }
 
 // recordError 记录错误指标
-func (m *Metrics) recordError(err error) {
+func (m *Metrics) recordError() {
 	atomic.AddUint64(&m.ErrorCount, 1)
-	errType := reflect.TypeOf(err).String()
-	if v, ok := m.errorTypes.Load(errType); ok {
-		m.errorTypes.Store(errType, v.(uint64)+1)
-	} else {
-		m.errorTypes.Store(errType, uint64(1))
-	}
+	atomic.StoreInt64(&m.LastErrorTime, time.Now().UnixNano())
+}
+
+// recordReconnect 记录重连指标
+func (m *Metrics) recordReconnect() {
+	atomic.AddUint64(&m.ReconnectCount, 1)
+}
+
+// reset 重置指标对象以供对象池复用
+func (m *Metrics) reset() {
+	atomic.StoreUint64(&m.TotalMessages, 0)
+	atomic.StoreUint64(&m.TotalBytes, 0)
+	atomic.StoreUint64(&m.ErrorCount, 0)
+	atomic.StoreUint64(&m.ReconnectCount, 0)
+	atomic.StoreInt64(&m.ActiveSessions, 0)
+	now := time.Now().UnixNano()
+	atomic.StoreInt64(&m.LastUpdate, now)
+	atomic.StoreInt64(&m.LastMessageTime, now)
+	atomic.StoreInt64(&m.LastErrorTime, now)
 }
 
 // updateSessionCount 更新会话计数
@@ -64,37 +65,15 @@ func (m *Metrics) updateSessionCount(delta int64) {
 
 // getSnapshot 获取指标快照，返回格式化的指标信息
 func (m *Metrics) getSnapshot() map[string]interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	messageRate := m.rates.messageRate.Load()
-	if messageRate == nil {
-		messageRate = formatRate(0)
-	}
-
-	byteRate := m.rates.byteRate.Load()
-	if byteRate == nil {
-		byteRate = formatByteRate(0)
-	}
-
-	avgRate := m.rates.avgMessageRate.Load()
-	if avgRate == nil {
-		avgRate = formatRate(0)
-	}
-
-	totalBytes := atomic.LoadUint64(&m.TotalBytes)
-
 	return map[string]interface{}{
-		"active_sessions":  atomic.LoadInt64(&m.ActiveSessions),
-		"total_messages":   atomic.LoadUint64(&m.TotalMessages),
-		"total_bytes":      formatBytes(totalBytes),
-		"message_rate":     messageRate,
-		"bytes_rate":       byteRate,
-		"avg_message_rate": avgRate,
-		"error_count":      atomic.LoadUint64(&m.ErrorCount),
-		"reconnect_count":  atomic.LoadUint64(&m.ReconnectCount),
-		"last_update":      m.LastUpdate.Format(time.DateTime),
-		"uptime":           time.Since(m.startTime).String(),
+		"active_sessions":   atomic.LoadInt64(&m.ActiveSessions),
+		"total_messages":    atomic.LoadUint64(&m.TotalMessages),
+		"total_bytes":       formatBytes(atomic.LoadUint64(&m.TotalBytes)),
+		"error_count":       atomic.LoadUint64(&m.ErrorCount),
+		"reconnect_count":   atomic.LoadUint64(&m.ReconnectCount),
+		"last_update":       time.Unix(0, atomic.LoadInt64(&m.LastUpdate)).Format(time.DateTime),
+		"last_message_time": time.Unix(0, atomic.LoadInt64(&m.LastMessageTime)).Format(time.DateTime),
+		"last_error_time":   time.Unix(0, atomic.LoadInt64(&m.LastErrorTime)).Format(time.DateTime),
 	}
 }
 
@@ -107,18 +86,13 @@ func (m *SessionMetrics) recordMessage(sent bool, bytes uint64) {
 		atomic.AddUint64(&m.MessagesReceived, 1)
 		atomic.AddUint64(&m.BytesReceived, bytes)
 	}
-
-	m.mu.Lock()
-	m.LastMessage = time.Now()
-	m.mu.Unlock()
+	atomic.StoreInt64(&m.LastMessage, time.Now().UnixNano())
 }
 
 // recordError 记录会话错误指标
 func (m *SessionMetrics) recordError(_ error) {
 	atomic.AddUint64(&m.Errors, 1)
-	m.mu.Lock()
-	m.LastError = time.Now()
-	m.mu.Unlock()
+	atomic.StoreInt64(&m.LastError, time.Now().UnixNano())
 }
 
 // recordReconnect 记录会话重连指标
@@ -126,11 +100,21 @@ func (m *SessionMetrics) recordReconnect() {
 	atomic.AddUint64(&m.Reconnects, 1)
 }
 
+// reset 重置会话指标对象以供对象池复用
+func (m *SessionMetrics) reset() {
+	atomic.StoreUint64(&m.MessagesSent, 0)
+	atomic.StoreUint64(&m.MessagesReceived, 0)
+	atomic.StoreUint64(&m.BytesSent, 0)
+	atomic.StoreUint64(&m.BytesReceived, 0)
+	atomic.StoreUint64(&m.Errors, 0)
+	atomic.StoreUint64(&m.Reconnects, 0)
+	now := time.Now().UnixNano()
+	atomic.StoreInt64(&m.LastMessage, now)
+	atomic.StoreInt64(&m.LastError, now)
+}
+
 // getSnapshot 获取会话指标快照
 func (m *SessionMetrics) getSnapshot() map[string]interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	return map[string]interface{}{
 		"messages_sent":     atomic.LoadUint64(&m.MessagesSent),
 		"messages_received": atomic.LoadUint64(&m.MessagesReceived),
@@ -138,48 +122,8 @@ func (m *SessionMetrics) getSnapshot() map[string]interface{} {
 		"bytes_received":    atomic.LoadUint64(&m.BytesReceived),
 		"errors":            atomic.LoadUint64(&m.Errors),
 		"reconnects":        atomic.LoadUint64(&m.Reconnects),
-		"last_error":        m.LastError,
-		"last_message":      m.LastMessage,
-	}
-}
-
-// rateUpdater 优化后的速率更新器
-func (m *Metrics) rateUpdater() {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	var lastMessageCount uint64
-	var lastByteCount uint64
-	lastTime := time.Now()
-
-	for range ticker.C {
-		currentTime := time.Now()
-		currentMessages := atomic.LoadUint64(&m.TotalMessages)
-		currentBytes := atomic.LoadUint64(&m.TotalBytes)
-
-		interval := currentTime.Sub(lastTime).Seconds()
-		if interval > 0 {
-			// 计算消息速率
-			messagesDiff := currentMessages - lastMessageCount
-			messageRate := float64(messagesDiff) / interval
-			m.rates.messageRate.Store(formatRate(messageRate))
-
-			// 计算数据速率
-			bytesDiff := currentBytes - lastByteCount
-			byteRate := uint64(float64(bytesDiff) / interval)
-			m.rates.byteRate.Store(formatByteRate(byteRate))
-
-			// 计算平均速率
-			uptime := currentTime.Sub(m.startTime).Seconds()
-			if uptime > 0 {
-				avgMessageRate := float64(currentMessages) / uptime
-				m.rates.avgMessageRate.Store(formatRate(avgMessageRate))
-			}
-		}
-
-		lastMessageCount = currentMessages
-		lastByteCount = currentBytes
-		lastTime = currentTime
+		"last_error":        time.Unix(0, atomic.LoadInt64(&m.LastError)),
+		"last_message":      time.Unix(0, atomic.LoadInt64(&m.LastMessage)),
 	}
 }
 
@@ -195,30 +139,4 @@ func formatBytes(bytes uint64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}
-
-// formatRate 格式化速率
-func formatRate(value float64) string {
-	switch {
-	case value >= 1000000:
-		return fmt.Sprintf("%.2f M%s", value/1000000, UnitMsg)
-	case value >= 1000:
-		return fmt.Sprintf("%.2f k%s", value/1000, UnitMsg)
-	default:
-		return fmt.Sprintf("%.2f %s", value, UnitMsg)
-	}
-}
-
-// formatByteRate 格式化字节速率
-func formatByteRate(bytesPerSecond uint64) string {
-	const unit = 1024
-	if bytesPerSecond < unit {
-		return fmt.Sprintf("%d %s", bytesPerSecond, UnitByte)
-	}
-	div, exp := uint64(unit), 0
-	for n := bytesPerSecond / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.2f %cB/s", float64(bytesPerSecond)/float64(div), "KMGTPE"[exp])
 }

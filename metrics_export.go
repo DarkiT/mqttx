@@ -34,8 +34,13 @@ func (e *PrometheusExporter) Export(metrics map[string]interface{}) string {
 			sb.WriteString(fmt.Sprintf("%s %d %d\n", metricName, val, timestamp))
 		case int64:
 			sb.WriteString(fmt.Sprintf("%s %d %d\n", metricName, val, timestamp))
+		case int:
+			sb.WriteString(fmt.Sprintf("%s %d %d\n", metricName, val, timestamp))
+		case string:
+			// 时间格式，忽略
 		}
 	}
+
 	return sb.String()
 }
 

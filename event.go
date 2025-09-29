@@ -8,7 +8,7 @@ func newEventManager() *EventManager {
 }
 
 // emit 发送事件到所有注册的处理函数
-func (em *EventManager) emit(event Event) {
+func (em *EventManager) emit(event *Event) {
 	em.mu.RLock()
 	defer em.mu.RUnlock()
 
