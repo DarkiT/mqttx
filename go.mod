@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/redis/go-redis/v9 v9.17.2
+	github.com/redis/go-redis/v9 v9.17.3
 	github.com/stretchr/testify v1.11.1
 )
 
